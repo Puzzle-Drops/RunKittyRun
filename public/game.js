@@ -108,6 +108,19 @@
     // Track previous positions for movement detection
     let prevPositions = {};
 
+    // FBX model system
+    let catTemplate = null;
+    let wolfTemplate = null;
+    let catAnimations = null;
+    let wolfAnimations = null;
+    let animMixers = {};  // entity id -> AnimationMixer
+    let lastTime = 0;
+
+    const CAT_SCALE = 0.18;
+    const WOLF_SCALE = 0.22;
+    const CAT_Y_OFFSET = 0;     // Vertical offset to ground model
+    const WOLF_Y_OFFSET = 0;
+
     const gameCanvas = document.getElementById('game-canvas');
     document.getElementById('game-container').addEventListener('mousemove', (e) => {
         const rect = gameCanvas.getBoundingClientRect();
@@ -423,6 +436,73 @@
     }
 
     // ═══════════════════════════════════════════════════════════
+    // FBX MODEL LOADING
+    // ═══════════════════════════════════════════════════════════
+
+    function loadFBXModels() {
+        const loader = new THREE.FBXLoader();
+        const texLoader = new THREE.TextureLoader();
+
+        // Load Cat model
+        loader.load('models/cat/Cat.fbx', (fbx) => {
+            const diffuse = texLoader.load('models/cat/T_Cat_Gr_D.png');
+            const normal = texLoader.load('models/cat/T_Cat_N.png');
+            const ao = texLoader.load('models/cat/T_Cat_AO.png');
+
+            fbx.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = new THREE.MeshPhongMaterial({
+                        map: diffuse,
+                        normalMap: normal,
+                        aoMap: ao,
+                        shininess: 25,
+                    });
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                }
+            });
+
+            fbx.scale.setScalar(1);
+            catTemplate = fbx;
+            catAnimations = fbx.animations;
+            console.log('Cat model loaded, animations:', catAnimations.map(a => a.name));
+        }, undefined, (err) => console.error('Failed to load Cat FBX:', err));
+
+        // Load Wolf model
+        loader.load('models/wolf/Wolf.fbx', (fbx) => {
+            const diffuse = texLoader.load('models/wolf/T_Wolf_Gr_D.png');
+            const normal = texLoader.load('models/wolf/T_Wolf_N.png');
+            const ao = texLoader.load('models/wolf/T_Wolf_AO.png');
+
+            fbx.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = new THREE.MeshPhongMaterial({
+                        map: diffuse,
+                        normalMap: normal,
+                        aoMap: ao,
+                        shininess: 20,
+                    });
+                    child.castShadow = false;
+                    child.receiveShadow = false;
+                }
+            });
+
+            fbx.scale.setScalar(1);
+            wolfTemplate = fbx;
+            wolfAnimations = fbx.animations;
+            console.log('Wolf model loaded, animations:', wolfAnimations.map(a => a.name));
+        }, undefined, (err) => console.error('Failed to load Wolf FBX:', err));
+    }
+
+    function cloneFBX(template) {
+        return THREE.SkeletonUtils.clone(template);
+    }
+
+    function findAnimation(clips, name) {
+        return clips.find(c => c.name.toLowerCase().includes(name.toLowerCase()));
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // MAZE GENERATION (mirrors server algorithm)
     // ═══════════════════════════════════════════════════════════
 
@@ -473,71 +553,116 @@
 
     function createKittenModel(color) {
         const group = new THREE.Group();
-        const col = new THREE.Color(color);
-        const bm = new THREE.MeshPhongMaterial({ color: col, shininess: 25 });
-        const lc = col.clone().lerp(new THREE.Color(0xffffff), 0.3);
-        const cm = new THREE.MeshPhongMaterial({ color: lc, shininess: 20 });
-        const ei = new THREE.MeshPhongMaterial({ color: lc.clone().lerp(new THREE.Color(0xffcccc), 0.3), shininess: 15 });
-
         group.add(makeShadow(16));
-        const bg = new THREE.Group(); bg.name = 'bodyGroup';
 
-        const body = new THREE.Mesh(GEO.kittenBody, bm);
-        body.scale.set(1, 0.75, 0.88); body.position.y = 9; bg.add(body);
-        const head = new THREE.Mesh(GEO.kittenHead, bm);
-        head.position.set(10, 12, 0); bg.add(head);
-        const chest = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 6), cm);
-        chest.position.set(4, 7, 0); bg.add(chest);
+        if (catTemplate) {
+            const model = cloneFBX(catTemplate);
+            model.scale.setScalar(CAT_SCALE);
+            model.position.y = CAT_Y_OFFSET;
 
-        [[-4, 0.2], [4, -0.2]].forEach(([z, rz]) => {
-            const e = new THREE.Mesh(GEO.kittenEar, bm);
-            e.position.set(12, 19, z); e.rotation.z = rz; bg.add(e);
-            const i = new THREE.Mesh(new THREE.ConeGeometry(1.8, 4, 4), ei);
-            i.position.set(12, 18.5, z); i.rotation.z = rz; bg.add(i);
-        });
-        [[-3], [3]].forEach(([z]) => {
-            const eye = new THREE.Mesh(GEO.kittenEye, MAT.eyeWhite);
-            eye.position.set(15, 13, z); bg.add(eye);
-            const pup = new THREE.Mesh(GEO.kittenPupil, MAT.pupil);
-            pup.position.set(16.2, 13, z); bg.add(pup);
-        });
-        const nose = new THREE.Mesh(GEO.kittenNose, MAT.nosePink);
-        nose.position.set(16.5, 11, 0); bg.add(nose);
-        const tail = new THREE.Mesh(GEO.kittenTail, bm);
-        tail.position.set(-14, 12, 0); tail.rotation.z = Math.PI / 4;
-        tail.name = 'tail'; bg.add(tail);
+            // Tint with player color
+            const col = new THREE.Color(color);
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    child.material = child.material.clone();
+                    child.material.color.multiply(col);
+                }
+            });
 
-        group.add(bg);
+            model.name = 'fbxModel';
+            group.add(model);
+
+            // Set up animation mixer
+            const mixer = new THREE.AnimationMixer(model);
+            const runClip = findAnimation(catAnimations, 'Run');
+            if (runClip) {
+                const action = mixer.clipAction(runClip);
+                action.play();
+            }
+            group.userData.mixer = mixer;
+            group.userData.isFBX = true;
+        } else {
+            // Fallback: procedural kitten
+            const col = new THREE.Color(color);
+            const bm = new THREE.MeshPhongMaterial({ color: col, shininess: 25 });
+            const lc = col.clone().lerp(new THREE.Color(0xffffff), 0.3);
+            const cm = new THREE.MeshPhongMaterial({ color: lc, shininess: 20 });
+            const ei = new THREE.MeshPhongMaterial({ color: lc.clone().lerp(new THREE.Color(0xffcccc), 0.3), shininess: 15 });
+            const bg = new THREE.Group(); bg.name = 'bodyGroup';
+            const body = new THREE.Mesh(GEO.kittenBody, bm);
+            body.scale.set(1, 0.75, 0.88); body.position.y = 9; bg.add(body);
+            const head = new THREE.Mesh(GEO.kittenHead, bm);
+            head.position.set(10, 12, 0); bg.add(head);
+            const chest = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 6), cm);
+            chest.position.set(4, 7, 0); bg.add(chest);
+            [[-4, 0.2], [4, -0.2]].forEach(([z, rz]) => {
+                const e = new THREE.Mesh(GEO.kittenEar, bm);
+                e.position.set(12, 19, z); e.rotation.z = rz; bg.add(e);
+                const i = new THREE.Mesh(new THREE.ConeGeometry(1.8, 4, 4), ei);
+                i.position.set(12, 18.5, z); i.rotation.z = rz; bg.add(i);
+            });
+            [[-3], [3]].forEach(([z]) => {
+                const eye = new THREE.Mesh(GEO.kittenEye, MAT.eyeWhite);
+                eye.position.set(15, 13, z); bg.add(eye);
+                const pup = new THREE.Mesh(GEO.kittenPupil, MAT.pupil);
+                pup.position.set(16.2, 13, z); bg.add(pup);
+            });
+            const nose = new THREE.Mesh(GEO.kittenNose, MAT.nosePink);
+            nose.position.set(16.5, 11, 0); bg.add(nose);
+            const tail = new THREE.Mesh(GEO.kittenTail, bm);
+            tail.position.set(-14, 12, 0); tail.rotation.z = Math.PI / 4;
+            tail.name = 'tail'; bg.add(tail);
+            group.add(bg);
+        }
+
         return group;
     }
 
     function createDogModel() {
         const group = new THREE.Group();
         group.add(makeShadow(20));
-        const bg = new THREE.Group(); bg.name = 'bodyGroup';
 
-        const body = new THREE.Mesh(GEO.dogBody, MAT.dogBody);
-        body.scale.set(1.1, 0.75, 0.85); body.position.y = 11; bg.add(body);
-        const head = new THREE.Mesh(GEO.dogHead, MAT.dogBody);
-        head.position.set(14, 14, 0); bg.add(head);
-        const snout = new THREE.Mesh(GEO.dogSnout, MAT.dogLight);
-        snout.scale.set(1, 0.7, 0.8); snout.position.set(20, 12, 0); bg.add(snout);
-        const dNose = new THREE.Mesh(GEO.dogNose, MAT.dogNose);
-        dNose.position.set(24, 13, 0); bg.add(dNose);
+        if (wolfTemplate) {
+            const model = cloneFBX(wolfTemplate);
+            model.scale.setScalar(WOLF_SCALE);
+            model.position.y = WOLF_Y_OFFSET;
+            model.name = 'fbxModel';
+            group.add(model);
 
-        [[-8], [8]].forEach(([z]) => {
-            const e = new THREE.Mesh(GEO.dogEar, MAT.dogDark);
-            e.scale.set(1, 0.5, 0.7); e.position.set(10, 16, z); bg.add(e);
-        });
-        [[-4], [4]].forEach(([z]) => {
-            const e = new THREE.Mesh(GEO.dogEye, MAT.dogEye);
-            e.position.set(19, 16, z); bg.add(e);
-        });
-        const tail = new THREE.Mesh(GEO.dogTail, MAT.dogBody);
-        tail.position.set(-16, 14, 0); tail.rotation.z = Math.PI / 3;
-        tail.name = 'tail'; bg.add(tail);
+            // Set up animation mixer
+            const mixer = new THREE.AnimationMixer(model);
+            const runClip = findAnimation(wolfAnimations, 'Run');
+            if (runClip) {
+                const action = mixer.clipAction(runClip);
+                action.play();
+            }
+            group.userData.mixer = mixer;
+            group.userData.isFBX = true;
+        } else {
+            // Fallback: procedural dog
+            const bg = new THREE.Group(); bg.name = 'bodyGroup';
+            const body = new THREE.Mesh(GEO.dogBody, MAT.dogBody);
+            body.scale.set(1.1, 0.75, 0.85); body.position.y = 11; bg.add(body);
+            const head = new THREE.Mesh(GEO.dogHead, MAT.dogBody);
+            head.position.set(14, 14, 0); bg.add(head);
+            const snout = new THREE.Mesh(GEO.dogSnout, MAT.dogLight);
+            snout.scale.set(1, 0.7, 0.8); snout.position.set(20, 12, 0); bg.add(snout);
+            const dNose = new THREE.Mesh(GEO.dogNose, MAT.dogNose);
+            dNose.position.set(24, 13, 0); bg.add(dNose);
+            [[-8], [8]].forEach(([z]) => {
+                const e = new THREE.Mesh(GEO.dogEar, MAT.dogDark);
+                e.scale.set(1, 0.5, 0.7); e.position.set(10, 16, z); bg.add(e);
+            });
+            [[-4], [4]].forEach(([z]) => {
+                const e = new THREE.Mesh(GEO.dogEye, MAT.dogEye);
+                e.position.set(19, 16, z); bg.add(e);
+            });
+            const tail = new THREE.Mesh(GEO.dogTail, MAT.dogBody);
+            tail.position.set(-16, 14, 0); tail.rotation.z = Math.PI / 3;
+            tail.name = 'tail'; bg.add(tail);
+            group.add(bg);
+        }
 
-        group.add(bg);
         return group;
     }
 
@@ -629,51 +754,55 @@
     function reconcileKittens(players) {
         const currentIds = new Set(players.map(p => p.id));
         for (const id of Object.keys(kittenMeshes)) {
-            if (!currentIds.has(id)) { scene.remove(kittenMeshes[id]); delete kittenMeshes[id]; }
+            if (!currentIds.has(id)) {
+                scene.remove(kittenMeshes[id]);
+                delete kittenMeshes[id];
+                delete animMixers['kitten_' + id];
+            }
         }
         for (const p of players) {
-            if (!kittenMeshes[p.id]) { kittenMeshes[p.id] = createKittenModel(p.color); scene.add(kittenMeshes[p.id]); }
+            if (!kittenMeshes[p.id]) {
+                kittenMeshes[p.id] = createKittenModel(p.color);
+                scene.add(kittenMeshes[p.id]);
+                if (kittenMeshes[p.id].userData.mixer) {
+                    animMixers['kitten_' + p.id] = kittenMeshes[p.id].userData.mixer;
+                }
+            }
             const mesh = kittenMeshes[p.id];
             mesh.visible = p.alive;
             if (!p.alive) continue;
 
             mesh.position.set(p.x, 0, p.y);
-            mesh.rotation.y = -p.angle; // FIXED: no + Math.PI/2
+            mesh.rotation.y = -p.angle;
 
-            const bg = mesh.getObjectByName('bodyGroup');
-            const shadow = mesh.getObjectByName('shadow');
-            const tail = mesh.getObjectByName('tail');
-            const moving = isMoving(p.id, p.x, p.y);
-
-            if (moving) {
-                // Hop animation
-                const hopPhase = Math.abs(Math.sin(frameTick * KITTEN_HOP_SPEED));
-                if (bg) {
-                    bg.position.y = hopPhase * KITTEN_HOP_HEIGHT;
-                    bg.rotation.z = Math.sin(frameTick * KITTEN_HOP_SPEED) * 0.08;
-                }
-                if (shadow) {
-                    const sc = 1 - hopPhase * 0.25;
-                    shadow.scale.set(sc, sc, 1);
-                    shadow.material.opacity = 0.25 - hopPhase * 0.12;
-                }
-                if (tail) {
-                    tail.rotation.x = Math.sin(frameTick * 0.3) * 0.6;
-                    tail.rotation.z = Math.PI / 4 + Math.sin(frameTick * KITTEN_HOP_SPEED * 2) * 0.15;
+            if (mesh.userData.isFBX) {
+                // FBX model — animation handled by mixer, just do invuln pulse
+                if (p.invulnTicks > 0) {
+                    const s = 1 + Math.sin(frameTick * 0.5) * 0.15;
+                    mesh.scale.set(s, s, s);
+                } else {
+                    mesh.scale.set(1, 1, 1);
                 }
             } else {
-                // Idle
-                if (bg) { bg.position.y = 0; bg.rotation.z = 0; }
-                if (shadow) { shadow.scale.set(1, 1, 1); shadow.material.opacity = 0.25; }
-                if (tail) { tail.rotation.x = Math.sin(frameTick * 0.1) * 0.3; tail.rotation.z = Math.PI / 4; }
-            }
-
-            // Invuln pulse
-            if (p.invulnTicks > 0) {
-                const s = 1 + Math.sin(frameTick * 0.5) * 0.15;
-                mesh.scale.set(s, s, s);
-            } else {
-                mesh.scale.set(1, 1, 1);
+                // Procedural fallback
+                const bg = mesh.getObjectByName('bodyGroup');
+                const shadow = mesh.getObjectByName('shadow');
+                const tail = mesh.getObjectByName('tail');
+                const moving = isMoving(p.id, p.x, p.y);
+                if (moving) {
+                    const hopPhase = Math.abs(Math.sin(frameTick * KITTEN_HOP_SPEED));
+                    if (bg) { bg.position.y = hopPhase * KITTEN_HOP_HEIGHT; bg.rotation.z = Math.sin(frameTick * KITTEN_HOP_SPEED) * 0.08; }
+                    if (shadow) { const sc = 1 - hopPhase * 0.25; shadow.scale.set(sc, sc, 1); shadow.material.opacity = 0.25 - hopPhase * 0.12; }
+                    if (tail) { tail.rotation.x = Math.sin(frameTick * 0.3) * 0.6; tail.rotation.z = Math.PI / 4 + Math.sin(frameTick * KITTEN_HOP_SPEED * 2) * 0.15; }
+                } else {
+                    if (bg) { bg.position.y = 0; bg.rotation.z = 0; }
+                    if (shadow) { shadow.scale.set(1, 1, 1); shadow.material.opacity = 0.25; }
+                    if (tail) { tail.rotation.x = Math.sin(frameTick * 0.1) * 0.3; tail.rotation.z = Math.PI / 4; }
+                }
+                if (p.invulnTicks > 0) {
+                    const s = 1 + Math.sin(frameTick * 0.5) * 0.15;
+                    mesh.scale.set(s, s, s);
+                } else { mesh.scale.set(1, 1, 1); }
             }
         }
     }
@@ -682,46 +811,43 @@
         if (!dogs) return;
         const currentIds = new Set(dogs.map(d => d.id));
         for (const id of Object.keys(dogMeshes)) {
-            if (!currentIds.has(parseInt(id))) { scene.remove(dogMeshes[id]); delete dogMeshes[id]; }
+            if (!currentIds.has(parseInt(id))) {
+                scene.remove(dogMeshes[id]);
+                delete dogMeshes[id];
+                delete animMixers['dog_' + id];
+            }
         }
         for (const d of dogs) {
-            if (!dogMeshes[d.id]) { dogMeshes[d.id] = createDogModel(); scene.add(dogMeshes[d.id]); }
+            if (!dogMeshes[d.id]) {
+                dogMeshes[d.id] = createDogModel();
+                scene.add(dogMeshes[d.id]);
+                if (dogMeshes[d.id].userData.mixer) {
+                    animMixers['dog_' + d.id] = dogMeshes[d.id].userData.mixer;
+                }
+            }
             const mesh = dogMeshes[d.id];
             mesh.position.set(d.x, 0, d.y);
-            mesh.rotation.y = -d.angle; // FIXED: no + Math.PI/2
+            mesh.rotation.y = -d.angle;
 
-            const bg = mesh.getObjectByName('bodyGroup');
-            const shadow = mesh.getObjectByName('shadow');
-            const tail = mesh.getObjectByName('tail');
-            const isIdle = d.s === 0;
-            const moving = isMoving('dog_' + d.id, d.x, d.y);
-
-            if (moving && !isIdle) {
-                // Dog hop (heavier, slower)
-                const hopPhase = Math.abs(Math.sin(frameTick * DOG_HOP_SPEED + d.id * 0.7));
-                if (bg) {
-                    bg.position.y = hopPhase * DOG_HOP_HEIGHT;
-                    bg.rotation.z = Math.sin(frameTick * DOG_HOP_SPEED + d.id * 0.7) * 0.06;
+            if (!mesh.userData.isFBX) {
+                // Procedural fallback
+                const bg = mesh.getObjectByName('bodyGroup');
+                const shadow = mesh.getObjectByName('shadow');
+                const tail = mesh.getObjectByName('tail');
+                const isIdle = d.s === 0;
+                const moving = isMoving('dog_' + d.id, d.x, d.y);
+                if (moving && !isIdle) {
+                    const hopPhase = Math.abs(Math.sin(frameTick * DOG_HOP_SPEED + d.id * 0.7));
+                    if (bg) { bg.position.y = hopPhase * DOG_HOP_HEIGHT; bg.rotation.z = Math.sin(frameTick * DOG_HOP_SPEED + d.id * 0.7) * 0.06; }
+                    if (shadow) { const sc = 1 - hopPhase * 0.2; shadow.scale.set(sc, sc, 1); shadow.material.opacity = 0.25 - hopPhase * 0.1; }
+                    if (tail) { tail.rotation.x = Math.sin(frameTick * 0.25 + d.id * 3) * 0.5; }
+                } else {
+                    if (bg) { bg.position.y = Math.sin(frameTick * 0.08 + d.id) * 1.5; bg.rotation.z = 0; }
+                    if (shadow) { shadow.scale.set(1, 1, 1); shadow.material.opacity = 0.25; }
+                    if (tail) { tail.rotation.x = Math.sin(frameTick * 0.1 + d.id * 3) * 0.4; }
                 }
-                if (shadow) {
-                    const sc = 1 - hopPhase * 0.2;
-                    shadow.scale.set(sc, sc, 1);
-                    shadow.material.opacity = 0.25 - hopPhase * 0.1;
-                }
-                if (tail) {
-                    tail.rotation.x = Math.sin(frameTick * 0.25 + d.id * 3) * 0.5;
-                }
-            } else {
-                // Idle bob
-                if (bg) {
-                    bg.position.y = Math.sin(frameTick * 0.08 + d.id) * 1.5;
-                    bg.rotation.z = 0;
-                }
-                if (shadow) { shadow.scale.set(1, 1, 1); shadow.material.opacity = 0.25; }
-                if (tail) { tail.rotation.x = Math.sin(frameTick * 0.1 + d.id * 3) * 0.4; }
             }
 
-            // Store position for next frame movement detection
             prevPositions['dog_' + d.id] = { x: d.x, y: d.y };
         }
     }
@@ -876,6 +1002,7 @@
             fillLight.position.set(1000, 800, 2000); scene.add(fillLight);
             initSharedAssets();
             buildMazeScene();
+            loadFBXModels();
             rendererReady = true;
             SFX.init();
         },
@@ -887,6 +1014,7 @@
             for (const id of Object.keys(kittenMeshes)) { scene.remove(kittenMeshes[id]); } kittenMeshes = {};
             for (const id of Object.keys(dogMeshes)) { scene.remove(dogMeshes[id]); } dogMeshes = {};
             for (const id of Object.keys(deathMarkers)) { scene.remove(deathMarkers[id]); } deathMarkers = {};
+            animMixers = {};
             prevPositions = {};
         },
 
@@ -911,6 +1039,14 @@
         render(fwCamera, gameState) {
             if (!rendererReady || !renderer3d) return;
             frameTick++;
+
+            // Update animation mixers
+            const now = performance.now() / 1000;
+            const delta = lastTime ? Math.min(now - lastTime, 0.1) : 0.016;
+            lastTime = now;
+            for (const id in animMixers) {
+                animMixers[id].update(delta);
+            }
 
             if (gameState) {
                 // Store player positions for movement detection
