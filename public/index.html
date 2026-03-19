@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDROP Arrow</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&display=swap"
+          rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%; height: 100%; overflow: hidden; background: #000;
+            font-family: 'Rajdhani', sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        /* Allow selecting text in chat input */
+        .chat-input { -webkit-user-select: text; user-select: text; }
+        .menu-input { -webkit-user-select: text; user-select: text; }
+
+        /* ── Framework CSS (do not modify) ────────────────────────── */
+
+        :root {
+            --bg-panel: rgba(10, 12, 18, 0.88);
+            --border-subtle: rgba(255, 255, 255, 0.08);
+            --border-light: rgba(255, 255, 255, 0.12);
+            --text-primary: rgba(255, 255, 255, 0.85);
+            --text-secondary: rgba(255, 255, 255, 0.55);
+            --text-dim: rgba(255, 255, 255, 0.35);
+            --text-input-bg: rgba(255, 255, 255, 0.04);
+
+            --color-red: #e74c3c;
+            --color-blue: #5dade2;
+            --color-green: #6fcf70;
+            --color-gold: #f0c040;
+            --color-purple: #b880e0;
+            --color-orange: #e89040;
+            --color-cyan: #40d8d0;
+            --color-pink: #e87090;
+            --color-lime: #a8e040;
+            --color-teal: #389090;
+            --color-salmon: #e8a088;
+            --color-lavender: #9898e0;
+        }
+
+        /* Scaling container */
+        #game-container {
+            position: absolute;
+            width: 1920px;
+            height: 1080px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            transform-origin: center center;
+            overflow: hidden;
+        }
+        @media (max-aspect-ratio: 16/9) {
+            #game-container { width: 100vw; height: calc(100vw * 9 / 16); }
+        }
+        @media (min-aspect-ratio: 16/9) {
+            #game-container { height: 100vh; width: calc(100vh * 16 / 9); }
+        }
+
+        /* Canvas */
+        #game-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: #12141a;
+        }
+
+        /* UI Overlay */
+        #ui {
+            position: absolute;
+            top: 0; left: 0;
+            width: 1920px;
+            height: 1080px;
+            z-index: 10;
+            pointer-events: none;
+        }
+        #ui > * { pointer-events: auto; }
+
+        /* Screen system */
+        .screen { position: absolute; top: 0; left: 0; width: 1920px; height: 1080px; }
+        .screen.hidden { display: none; }
+
+        /* ── Chat ── */
+        .chatbox {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            width: 480px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 20;
+        }
+        .chat-messages {
+            padding: 14px 16px;
+            max-height: 280px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .chat-msg {
+            font-size: 20px;
+            font-weight: 500;
+            line-height: 1.3;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        .chat-msg .name { font-weight: 700; }
+        .chat-msg.system { color: var(--text-dim); font-style: italic; }
+        .chat-channel-tag {
+            padding: 10px 8px 10px 14px;
+            font-size: 20px;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.5);
+            font-family: 'Rajdhani', sans-serif;
+        }
+        .chat-input-row {
+            display: none;
+            align-items: center;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .chat-active .chat-input-row { display: flex; }
+        .chat-input {
+            flex: 1;
+            background: var(--text-input-bg);
+            border: none;
+            padding: 10px 14px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 20px;
+            font-weight: 500;
+            color: #fff;
+            outline: none;
+        }
+        .chat-input::placeholder { color: rgba(255, 255, 255, 0.2); }
+
+        /* ── Tooltip ── */
+        .tooltip {
+            position: absolute;
+            z-index: 100;
+            background: rgba(10, 12, 18, 0.94);
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 18px;
+            font-weight: 500;
+            color: var(--text-primary);
+            line-height: 1.4;
+            max-width: 360px;
+            pointer-events: none;
+            white-space: pre-line;
+            transition: opacity 0.1s ease;
+        }
+        .tooltip.hidden { opacity: 0; visibility: hidden; }
+        .tooltip .tip-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+        .tooltip .tip-desc { color: var(--text-secondary); }
+        .tooltip .tip-stat { color: #5dade2; font-weight: 600; }
+        .tooltip .tip-key {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 3px;
+            padding: 0 5px;
+            font-size: 15px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.7);
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .tooltip .tip-divider { border: none; border-top: 1px solid var(--border-subtle); margin: 6px 0; }
+
+        /* ── Scoreboard ── */
+        .scoreboard-backdrop {
+            position: absolute;
+            top: 0; left: 0;
+            width: 1920px;
+            height: 1080px;
+            background: rgba(0, 0, 0, 0.5);
+            pointer-events: auto;
+            z-index: 50;
+        }
+        .scoreboard-backdrop.hidden { display: none; }
+        .scoreboard-panel {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 700px;
+            max-height: 800px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 24px;
+            overflow-y: auto;
+        }
+        .sb-title { font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 16px; text-align: center; }
+        .sb-team-header { font-size: 22px; font-weight: 700; margin: 12px 0 6px; }
+        .sb-row {
+            display: flex;
+            align-items: center;
+            padding: 6px 10px;
+            border-radius: 4px;
+            gap: 10px;
+            cursor: pointer;
+        }
+        .sb-row:hover { background: rgba(255, 255, 255, 0.04); }
+        .sb-color { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+        .sb-name { flex: 1; font-size: 20px; font-weight: 600; }
+        .sb-stat { font-size: 18px; font-weight: 500; color: var(--text-secondary); text-align: center; }
+        .sb-global {
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-subtle);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .sb-global label {
+            font-size: 16px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+
+        /* ── Main Menu ── */
+        .menu-center {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        .menu-title {
+            font-size: 72px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 4px;
+            margin-bottom: 8px;
+        }
+        .menu-subtitle {
+            font-size: 28px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 40px;
+        }
+        .menu-input {
+            display: block;
+            width: 320px;
+            margin: 0 auto 20px;
+            padding: 12px 18px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 22px;
+            font-weight: 500;
+            color: #fff;
+            background: var(--text-input-bg);
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            outline: none;
+            text-align: center;
+        }
+        .menu-input::placeholder { color: var(--text-dim); }
+        .menu-input:focus { border-color: rgba(255,255,255,0.25); }
+        .menu-buttons { display: flex; gap: 16px; justify-content: center; }
+        .menu-btn {
+            padding: 12px 36px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            cursor: pointer;
+            letter-spacing: 1px;
+            transition: background 0.15s;
+        }
+        .menu-btn:hover { background: rgba(255, 255, 255, 0.14); }
+        .menu-btn.primary { background: rgba(93, 173, 226, 0.2); border-color: rgba(93, 173, 226, 0.4); }
+        .menu-btn.primary:hover { background: rgba(93, 173, 226, 0.35); }
+
+        /* ── Server Browser ── */
+        .browser-panel {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 700px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 24px;
+        }
+        .browser-title {
+            font-size: 32px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 16px;
+        }
+        .browser-controls { display: flex; gap: 12px; margin-bottom: 16px; }
+        .server-list { max-height: 400px; overflow-y: auto; }
+        .server-row {
+            display: flex;
+            align-items: center;
+            padding: 10px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            gap: 16px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .server-row:hover { background: rgba(255, 255, 255, 0.04); }
+        .server-name { flex: 1; font-size: 20px; font-weight: 600; color: #fff; }
+        .server-mode { font-size: 16px; font-weight: 500; color: var(--text-secondary); width: 80px; }
+        .server-players { font-size: 16px; font-weight: 500; color: var(--text-secondary); width: 60px; }
+        .server-state { font-size: 16px; font-weight: 500; color: var(--text-dim); width: 80px; }
+        .server-empty { padding: 40px; text-align: center; color: var(--text-dim); font-size: 20px; }
+
+        /* ── Lobby ── */
+        .lobby-panel {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 800px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 28px;
+        }
+        .lobby-server-name { font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 16px; text-align: center; }
+        .lobby-mode-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .lobby-mode-btn, .lobby-tc-btn {
+            padding: 6px 18px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-subtle);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .lobby-mode-btn.active, .lobby-tc-btn.active {
+            color: #fff;
+            background: rgba(93, 173, 226, 0.2);
+            border-color: rgba(93, 173, 226, 0.4);
+        }
+        .lobby-team-count-label { font-size: 18px; color: var(--text-secondary); margin-left: 12px; }
+        .lobby-teams { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+        .lobby-team-panel {
+            flex: 1;
+            min-width: 160px;
+            max-width: 200px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .lobby-ffa-panel {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .lobby-ffa-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+        .lobby-team-header {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .lobby-team-header:hover { background: rgba(255, 255, 255, 0.04); }
+        .lobby-slot {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 18px;
+            font-weight: 500;
+        }
+        .lobby-slot.open { color: var(--text-dim); cursor: pointer; }
+        .lobby-slot.open:hover { background: rgba(255, 255, 255, 0.04); }
+        .lobby-slot.closed { color: var(--text-dim); }
+        .lobby-slot.closed[data-slot-action] { cursor: pointer; }
+        .lobby-slot.closed[data-slot-action]:hover { background: rgba(255, 255, 255, 0.04); }
+        .lobby-slot.occupied { color: var(--text-primary); }
+        .slot-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .slot-name { flex: 1; font-weight: 600; }
+        .slot-ready { color: var(--color-green); font-weight: 700; }
+        .slot-kick { color: var(--text-dim); cursor: pointer; font-size: 20px; }
+        .slot-kick:hover { color: var(--color-red); }
+        .slot-icon { width: 10px; display: inline-block; text-align: center; }
+        .slot-label { color: var(--text-dim); }
+
+        .lobby-bottom {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        .lobby-ready-btn, .lobby-start-btn, .lobby-leave-btn {
+            padding: 10px 28px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: #fff;
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            cursor: pointer;
+            letter-spacing: 1px;
+        }
+        .lobby-ready-btn { background: rgba(255, 255, 255, 0.06); }
+        .lobby-ready-btn.ready { background: rgba(111, 207, 112, 0.2); border-color: rgba(111, 207, 112, 0.4); }
+        .lobby-start-btn { background: rgba(93, 173, 226, 0.2); border-color: rgba(93, 173, 226, 0.4); }
+        .lobby-start-btn:hover { background: rgba(93, 173, 226, 0.35); }
+        .lobby-leave-btn { background: rgba(231, 76, 60, 0.15); border-color: rgba(231, 76, 60, 0.3); }
+        .lobby-leave-btn:hover { background: rgba(231, 76, 60, 0.25); }
+
+        /* ── Post-Game ── */
+        .postgame-panel {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 600px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            padding: 32px;
+            text-align: center;
+        }
+        .pg-title { font-size: 40px; font-weight: 700; color: #fff; margin-bottom: 20px; }
+        .pg-leaderboard { margin-bottom: 20px; }
+        .pg-player-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 5px 0;
+            font-size: 20px;
+            font-weight: 500;
+        }
+        .pg-player-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .pg-player-name { flex: 1; font-weight: 600; }
+        .pg-player-kills { color: var(--text-secondary); width: 80px; text-align: right; }
+        .pg-dead { color: var(--text-dim); font-size: 16px; margin-left: 8px; }
+        .pg-buttons { display: flex; justify-content: center; gap: 16px; }
+        .pg-btn {
+            padding: 12px 36px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 22px;
+            font-weight: 700;
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .pg-btn:hover { background: rgba(255, 255, 255, 0.14); }
+
+        /* ── Context Menu ── */
+        .context-menu {
+            position: absolute;
+            z-index: 110;
+            background: rgba(10, 12, 18, 0.94);
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            padding: 4px 0;
+            min-width: 160px;
+        }
+        .ctx-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            font-size: 18px;
+            font-weight: 500;
+            color: var(--text-primary);
+            cursor: pointer;
+        }
+        .ctx-item:hover { background: rgba(255, 255, 255, 0.06); }
+        .ctx-item input[type="checkbox"] { cursor: pointer; }
+
+        /* ── Game CSS (replace for new games) ─────────────────────── */
+
+        #kill-feed {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            pointer-events: none;
+        }
+        .kill-entry {
+            font-size: 18px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: right;
+            white-space: nowrap;
+            transition: opacity 1s;
+        }
+        .kill-entry .arrow-icon { color: rgba(255, 255, 255, 0.4); margin: 0 6px; }
+
+        #alive-count {
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 22px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.7);
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas" width="1920" height="1080"></canvas>
+        <div id="ui">
+            <!-- ── Framework DOM (do not modify) ── -->
+
+            <!-- Main Menu -->
+            <div class="screen" id="main-menu">
+                <div class="menu-center">
+                    <div class="menu-title">PDROP ARROW</div>
+                    <div class="menu-subtitle">Multiplayer Top-Down Arena</div>
+                    <input class="menu-input" id="name-input" type="text" placeholder="Enter your name..." maxlength="20">
+                    <div class="menu-buttons">
+                        <button class="menu-btn primary" id="btn-create">CREATE GAME</button>
+                        <button class="menu-btn" id="btn-browse">BROWSE SERVERS</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Server Browser -->
+            <div class="screen hidden" id="browser-screen">
+                <div class="browser-panel">
+                    <div class="browser-title">Server Browser</div>
+                    <div class="browser-controls">
+                        <button class="menu-btn" id="btn-refresh">REFRESH</button>
+                        <button class="menu-btn" id="btn-browser-back">BACK</button>
+                    </div>
+                    <div class="server-list" id="server-list">
+                        <div class="server-empty">No servers found. Create one!</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lobby -->
+            <div class="screen hidden" id="lobby-screen">
+                <div class="lobby-panel">
+                    <div id="lobby-content"></div>
+                </div>
+            </div>
+
+            <!-- Game Screen (empty - canvas handles rendering, pointer-events pass through) -->
+            <div class="screen hidden" id="game-screen" style="pointer-events:none;"></div>
+
+            <!-- Post-Game -->
+            <div class="screen hidden" id="postgame-screen">
+                <div class="postgame-panel">
+                    <div id="postgame-content"></div>
+                </div>
+            </div>
+
+            <!-- Scoreboard Backdrop -->
+            <div class="scoreboard-backdrop hidden" id="scoreboard-backdrop">
+                <div class="scoreboard-panel" id="scoreboard-panel"></div>
+            </div>
+
+            <!-- Tooltip -->
+            <div id="tooltip" class="tooltip hidden"></div>
+
+            <!-- Chat -->
+            <div class="chatbox">
+                <div class="chat-messages" id="chat-messages"></div>
+                <div class="chat-input-row">
+                    <span class="chat-channel-tag" id="chat-channel-tag">[Team]</span>
+                    <input class="chat-input" id="chat-input" type="text"
+                           placeholder="Press Enter to chat...">
+                </div>
+            </div>
+
+            <!-- ── Game DOM (replace for new games) ── -->
+            <div id="kill-feed"></div>
+            <div id="alive-count"></div>
+
+        </div>
+    </div>
+
+    <script src="framework.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
