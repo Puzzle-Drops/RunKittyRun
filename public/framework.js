@@ -1,5 +1,6 @@
 // PDROP Framework — Client-side scaling, camera, chat, pings, scoreboard, tooltips, lobby UI
 // This file is the same for every PDROP game. Do not modify.
+// Supports both 2D and 3D games via GameDef.renderer ('2d' | '3d')
 
 (function () {
     'use strict';
@@ -22,8 +23,33 @@
     // ── DOM References ────────────────────────────────────────────
     const container = document.getElementById('game-container');
     const canvas = document.getElementById('game-canvas');
-    const ctx = canvas.getContext('2d');
     const ui = document.getElementById('ui');
+
+    // ── Overlay Canvas (framework-owned, always 2D) ───────────────
+    // Pings, ping wheel, and countdown render here — independent of
+    // whether the game uses 2D or 3D on the main game canvas.
+    const overlayCanvas = document.createElement('canvas');
+    overlayCanvas.id = 'overlay-canvas';
+    overlayCanvas.width = VIRTUAL_W;
+    overlayCanvas.height = VIRTUAL_H;
+    overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:5;';
+    container.insertBefore(overlayCanvas, ui);
+    const overlayCtx = overlayCanvas.getContext('2d');
+
+    // ── Renderer Mode ─────────────────────────────────────────────
+    // Determined at game start from GameDef.renderer ('2d' | '3d')
+    // In 2D mode: framework creates ctx on game canvas, passes to render()
+    // In 3D mode: framework never touches game canvas context. Game owns it.
+    let rendererMode = '2d'; // default, updated when GameDef is read
+    let ctx = null;          // only set in 2D mode
+
+    function initRendererMode() {
+        rendererMode = (window.GameDef && window.GameDef.renderer === '3d') ? '3d' : '2d';
+        if (rendererMode === '2d') {
+            ctx = canvas.getContext('2d');
+        }
+        // In 3D mode, ctx stays null — game calls initRenderer to set up WebGL/Three.js
+    }
 
     // ── Scaling ───────────────────────────────────────────────────
     function updateScale() {
@@ -664,8 +690,6 @@
             lobbyContent.querySelectorAll('.lobby-slot.occupied').forEach(slotEl => {
                 slotEl.addEventListener('contextmenu', (e) => {
                     e.preventDefault();
-                    const tooltip = slotEl.getAttribute('data-tooltip');
-                    // Find the player id from the slot
                     const slotData = currentLobby.slots.find(s =>
                         s.state === 'occupied' && s.player &&
                         slotEl.querySelector('.slot-name')?.textContent.includes(s.player.name)
@@ -798,16 +822,15 @@
         }
         html += '</div>';
 
-        // Kill leaderboard
+        // Leaderboard
         if (result.stats && result.stats.length > 0) {
-            const sorted = result.stats.slice().sort((a, b) => (b.kills || 0) - (a.kills || 0));
             html += '<div class="pg-leaderboard">';
-            for (const p of sorted) {
-                const status = p.alive ? '' : ' <span class="pg-dead">eliminated</span>';
+            for (const p of result.stats) {
+                const status = p.reachedGoal ? ' <span style="color:#f0c040">★ Finished</span>' :
+                               p.alive ? '' : ' <span class="pg-dead">caught</span>';
                 html += `<div class="pg-player-row">`;
                 html += `<span class="pg-player-color" style="background:${p.color}"></span>`;
                 html += `<span class="pg-player-name" style="color:${p.color}">${escapeHtml(p.name)}</span>`;
-                html += `<span class="pg-player-kills">${p.kills || 0} kill${(p.kills || 0) !== 1 ? 's' : ''}</span>`;
                 html += status;
                 html += `</div>`;
             }
@@ -839,6 +862,8 @@
         switch (msg.type) {
             case 'connected':
                 localPlayerId = msg.id;
+                // Initialize renderer mode from GameDef
+                initRendererMode();
                 // Try to rejoin previous session
                 const prevSession = sessionStorage.getItem('pdrop_session');
                 if (prevSession) {
@@ -914,6 +939,11 @@
                 if (msg.players) countdownPlayers = msg.players;
                 showScreen('game-screen');
 
+                // Initialize 3D renderer if needed (first countdown triggers it)
+                if (rendererMode === '3d' && window.GameDef && window.GameDef.initRenderer) {
+                    window.GameDef.initRenderer(canvas);
+                }
+
                 if (window.GameDef && window.GameDef.onGameStart && msg.players) {
                     window.GameDef.onGameStart({ players: msg.players });
                 }
@@ -942,7 +972,27 @@
             case 'elimination':
                 addChatMessage({
                     channel: 'system',
-                    text: msg.killerName + ' eliminated ' + msg.playerName,
+                    text: msg.killerName ? (msg.killerName + ' eliminated ' + msg.playerName) : (msg.playerName + ' was caught!'),
+                });
+                if (window.GameDef && window.GameDef.onElimination) {
+                    window.GameDef.onElimination(msg);
+                }
+                break;
+
+            case 'kitten_revived':
+                addChatMessage({
+                    channel: 'system',
+                    text: msg.reviverName + ' revived ' + msg.playerName + '!',
+                });
+                if (window.GameDef && window.GameDef.onElimination) {
+                    window.GameDef.onElimination(msg);
+                }
+                break;
+
+            case 'kitten_reached_goal':
+                addChatMessage({
+                    channel: 'system',
+                    text: msg.playerName + ' reached the goal!',
                 });
                 if (window.GameDef && window.GameDef.onElimination) {
                     window.GameDef.onElimination(msg);
@@ -1073,7 +1123,6 @@
     }, { passive: false });
 
     // ── Mouse Input ───────────────────────────────────────────────
-    // Track mouse on the container so it works even over UI overlays
     let isOverCanvasEntity = false;
 
     container.addEventListener('mousemove', (e) => {
@@ -1106,25 +1155,18 @@
     function findEntityAt(worldX, worldY) {
         if (!gameState) return null;
         // Check players
-        for (const p of gameState.players) {
-            if (!p.alive) continue;
-            const dist = Math.hypot(worldX - p.x, worldY - p.y);
-            if (dist < (p.radius || 18) + 8) {
-                return { type: 'player', ...p };
+        if (gameState.players) {
+            for (const p of gameState.players) {
+                if (!p.alive) continue;
+                const dist = Math.hypot(worldX - p.x, worldY - p.y);
+                if (dist < (p.radius || 18) + 8) {
+                    return { type: 'player', ...p };
+                }
             }
         }
-        // Check obstacles
-        const obstacles = [
-            { x: 800, y: 600, w: 120, h: 200 },
-            { x: 2000, y: 400, w: 200, h: 120 },
-            { x: 1400, y: 1200, w: 160, h: 160 },
-            { x: 600, y: 1600, w: 200, h: 100 },
-            { x: 2400, y: 1800, w: 120, h: 220 },
-        ];
-        for (const o of obstacles) {
-            if (worldX >= o.x && worldX <= o.x + o.w && worldY >= o.y && worldY <= o.y + o.h) {
-                return { type: 'obstacle', ...o };
-            }
+        // Game-defined entity hit test
+        if (window.GameDef && window.GameDef.findEntityAt) {
+            return window.GameDef.findEntityAt(worldX, worldY);
         }
         return null;
     }
@@ -1150,7 +1192,6 @@
     // Also handle right-click on the container (in case UI overlay intercepts)
     container.addEventListener('mousedown', (e) => {
         if (e.button === 2) {
-            // Right-click — forward to canvas contextmenu logic
             if (chatFocused || scoreboardOpen || altHeld) return;
             if (gamePhase !== 'playing') return;
 
@@ -1203,8 +1244,8 @@
         return gameState.players.find(p => p.id === localPlayerId) || null;
     }
 
-    // ── Ping Rendering ────────────────────────────────────────────
-    function renderPings(ctx) {
+    // ── Ping Rendering (on overlay canvas) ────────────────────────
+    function renderPings(oc) {
         for (let i = activePings.length - 1; i >= 0; i--) {
             const p = activePings[i];
             p.life--;
@@ -1225,70 +1266,70 @@
                 const t = rippleAge / 50;
                 const radius = 10 + t * 55;
                 const rippleAlpha = (1 - t) * 0.4 * alpha;
-                ctx.beginPath();
-                ctx.arc(sx, sy, radius, 0, Math.PI * 2);
-                ctx.strokeStyle = p.color;
-                ctx.globalAlpha = rippleAlpha;
-                ctx.lineWidth = 2;
-                ctx.stroke();
+                oc.beginPath();
+                oc.arc(sx, sy, radius, 0, Math.PI * 2);
+                oc.strokeStyle = p.color;
+                oc.globalAlpha = rippleAlpha;
+                oc.lineWidth = 2;
+                oc.stroke();
             }
 
             // Glow
             const glowR = 30 + Math.sin(age * 0.08) * 5;
-            const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
+            const grad = oc.createRadialGradient(sx, sy, 0, sx, sy, glowR);
             grad.addColorStop(0, p.color);
             grad.addColorStop(1, 'transparent');
-            ctx.globalAlpha = 0.25 * alpha;
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.arc(sx, sy, glowR, 0, Math.PI * 2);
-            ctx.fill();
+            oc.globalAlpha = 0.25 * alpha;
+            oc.fillStyle = grad;
+            oc.beginPath();
+            oc.arc(sx, sy, glowR, 0, Math.PI * 2);
+            oc.fill();
 
             // Background circle
-            ctx.globalAlpha = 0.7 * alpha;
-            ctx.fillStyle = '#12141a';
-            ctx.beginPath();
-            ctx.arc(sx, sy, 18, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = p.color;
-            ctx.lineWidth = 2;
-            ctx.stroke();
+            oc.globalAlpha = 0.7 * alpha;
+            oc.fillStyle = '#12141a';
+            oc.beginPath();
+            oc.arc(sx, sy, 18, 0, Math.PI * 2);
+            oc.fill();
+            oc.strokeStyle = p.color;
+            oc.lineWidth = 2;
+            oc.stroke();
 
-            // Icon (simplified)
-            ctx.globalAlpha = alpha;
-            ctx.fillStyle = p.color;
-            ctx.font = 'bold 16px Rajdhani';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
+            // Icon
+            oc.globalAlpha = alpha;
+            oc.fillStyle = p.color;
+            oc.font = 'bold 16px Rajdhani';
+            oc.textAlign = 'center';
+            oc.textBaseline = 'middle';
             const bounce = age < 15 ? Math.sin(age / 15 * Math.PI) * 4 : 0;
             if (p.type === 'danger') {
-                ctx.fillText('!', sx, sy - bounce);
+                oc.fillText('!', sx, sy - bounce);
             } else if (p.type === 'omw') {
-                ctx.fillText('▼', sx, sy - bounce);
+                oc.fillText('▼', sx, sy - bounce);
             } else if (p.type === 'assist') {
-                ctx.fillText('+', sx, sy - bounce);
+                oc.fillText('+', sx, sy - bounce);
             } else if (p.type === 'question') {
-                ctx.fillText('?', sx, sy - bounce);
+                oc.fillText('?', sx, sy - bounce);
             } else {
-                ctx.beginPath();
-                ctx.arc(sx, sy - bounce, 6, 0, Math.PI * 2);
-                ctx.fill();
+                oc.beginPath();
+                oc.arc(sx, sy - bounce, 6, 0, Math.PI * 2);
+                oc.fill();
             }
 
             // Label
             if (p.label) {
-                ctx.globalAlpha = alpha;
-                ctx.fillStyle = p.color;
-                ctx.font = 'bold 11px Consolas';
-                ctx.textAlign = 'center';
-                ctx.fillText(p.label, sx, sy + 30);
+                oc.globalAlpha = alpha;
+                oc.fillStyle = p.color;
+                oc.font = 'bold 11px Consolas';
+                oc.textAlign = 'center';
+                oc.fillText(p.label, sx, sy + 30);
             }
         }
-        ctx.globalAlpha = 1;
+        oc.globalAlpha = 1;
     }
 
-    // ── Ping Wheel Rendering ──────────────────────────────────────
-    function renderPingWheel(ctx) {
+    // ── Ping Wheel Rendering (on overlay canvas) ──────────────────
+    function renderPingWheel(oc) {
         if (!pingWheelOpen) return;
 
         pingWheelAnim = Math.min(pingWheelAnim + 1, 8);
@@ -1301,18 +1342,18 @@
         const cy = pingWheelCanvasY;
 
         // Dim overlay
-        ctx.globalAlpha = 0.3 * ease;
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
+        oc.globalAlpha = 0.3 * ease;
+        oc.fillStyle = '#000';
+        oc.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
 
         const hoveredSlice = getWheelSlice(cx, cy, mouseCanvasX, mouseCanvasY);
 
         // Ring background
-        ctx.globalAlpha = 0.85 * ease;
-        ctx.fillStyle = '#12141a';
-        ctx.beginPath();
-        ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
-        ctx.fill();
+        oc.globalAlpha = 0.85 * ease;
+        oc.fillStyle = '#12141a';
+        oc.beginPath();
+        oc.arc(cx, cy, r + 4, 0, Math.PI * 2);
+        oc.fill();
 
         // Slices
         for (let i = 0; i < SLICES.length; i++) {
@@ -1322,50 +1363,50 @@
             const isHovered = hoveredSlice && hoveredSlice.type === s.type;
             const pt = PING_TYPES[s.type];
 
-            ctx.beginPath();
-            ctx.arc(cx, cy, r, startAngle, endAngle);
-            ctx.arc(cx, cy, inner, endAngle, startAngle, true);
-            ctx.closePath();
+            oc.beginPath();
+            oc.arc(cx, cy, r, startAngle, endAngle);
+            oc.arc(cx, cy, inner, endAngle, startAngle, true);
+            oc.closePath();
 
             if (isHovered) {
-                const grad = ctx.createRadialGradient(cx, cy, inner, cx, cy, r);
+                const grad = oc.createRadialGradient(cx, cy, inner, cx, cy, r);
                 grad.addColorStop(0, 'rgba(0,0,0,0.3)');
                 grad.addColorStop(1, pt.color + '40');
-                ctx.fillStyle = grad;
-                ctx.globalAlpha = 0.9 * ease;
+                oc.fillStyle = grad;
+                oc.globalAlpha = 0.9 * ease;
             } else {
-                ctx.fillStyle = 'rgba(30,30,40,0.8)';
-                ctx.globalAlpha = 0.7 * ease;
+                oc.fillStyle = 'rgba(30,30,40,0.8)';
+                oc.globalAlpha = 0.7 * ease;
             }
-            ctx.fill();
+            oc.fill();
 
-            ctx.strokeStyle = isHovered ? pt.color : 'rgba(255,255,255,0.15)';
-            ctx.lineWidth = isHovered ? 2 : 1;
-            ctx.globalAlpha = ease;
-            ctx.stroke();
+            oc.strokeStyle = isHovered ? pt.color : 'rgba(255,255,255,0.15)';
+            oc.lineWidth = isHovered ? 2 : 1;
+            oc.globalAlpha = ease;
+            oc.stroke();
 
             // Slice icon
             const midR = (r + inner) / 2;
             const ix = cx + Math.cos(s.angle) * midR;
             const iy = cy + Math.sin(s.angle) * midR;
             const iconSize = isHovered ? 16 : 13;
-            ctx.globalAlpha = isHovered ? ease : 0.6 * ease;
-            ctx.fillStyle = pt.color;
-            ctx.font = `bold ${iconSize}px Rajdhani`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            if (s.type === 'danger') ctx.fillText('!', ix, iy);
-            else if (s.type === 'omw') ctx.fillText('▼', ix, iy);
-            else if (s.type === 'assist') ctx.fillText('+', ix, iy);
-            else if (s.type === 'question') ctx.fillText('?', ix, iy);
+            oc.globalAlpha = isHovered ? ease : 0.6 * ease;
+            oc.fillStyle = pt.color;
+            oc.font = `bold ${iconSize}px Rajdhani`;
+            oc.textAlign = 'center';
+            oc.textBaseline = 'middle';
+            if (s.type === 'danger') oc.fillText('!', ix, iy);
+            else if (s.type === 'omw') oc.fillText('▼', ix, iy);
+            else if (s.type === 'assist') oc.fillText('+', ix, iy);
+            else if (s.type === 'question') oc.fillText('?', ix, iy);
         }
 
         // Center dot
-        ctx.globalAlpha = ease;
-        ctx.fillStyle = !hoveredSlice ? '#4dc9f6' : '#333';
-        ctx.beginPath();
-        ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-        ctx.fill();
+        oc.globalAlpha = ease;
+        oc.fillStyle = !hoveredSlice ? '#4dc9f6' : '#333';
+        oc.beginPath();
+        oc.arc(cx, cy, 8, 0, Math.PI * 2);
+        oc.fill();
 
         // Drag line
         if (hoveredSlice) {
@@ -1374,38 +1415,38 @@
             const dy = mouseCanvasY - cy;
             const dist = Math.min(Math.hypot(dx, dy), r);
             const angle = Math.atan2(dy, dx);
-            ctx.beginPath();
-            ctx.moveTo(cx, cy);
-            ctx.lineTo(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
-            ctx.strokeStyle = pt.color;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = 0.6 * ease;
-            ctx.stroke();
+            oc.beginPath();
+            oc.moveTo(cx, cy);
+            oc.lineTo(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
+            oc.strokeStyle = pt.color;
+            oc.lineWidth = 2;
+            oc.globalAlpha = 0.6 * ease;
+            oc.stroke();
 
             // Label outside ring
             const labelX = cx + Math.cos(hoveredSlice.angle) * (r + 24);
             const labelY = cy + Math.sin(hoveredSlice.angle) * (r + 24);
-            ctx.globalAlpha = ease;
-            ctx.fillStyle = pt.color;
-            ctx.font = 'bold 13px Rajdhani';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(pt.label || 'Ping', labelX, labelY);
+            oc.globalAlpha = ease;
+            oc.fillStyle = pt.color;
+            oc.font = 'bold 13px Rajdhani';
+            oc.textAlign = 'center';
+            oc.textBaseline = 'middle';
+            oc.fillText(pt.label || 'Ping', labelX, labelY);
         }
 
-        ctx.globalAlpha = 1;
+        oc.globalAlpha = 1;
     }
 
-    // ── Countdown Rendering ───────────────────────────────────────
-    function renderCountdown(ctx) {
+    // ── Countdown Rendering (on overlay canvas) ───────────────────
+    function renderCountdown(oc) {
         if (gamePhase !== 'countdown' || countdownValue <= 0) return;
-        ctx.globalAlpha = 0.8;
-        ctx.fillStyle = '#fff';
-        ctx.font = '700 120px Rajdhani';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(countdownValue.toString(), VIRTUAL_W / 2, VIRTUAL_H / 2);
-        ctx.globalAlpha = 1;
+        oc.globalAlpha = 0.8;
+        oc.fillStyle = '#fff';
+        oc.font = '700 120px Rajdhani';
+        oc.textAlign = 'center';
+        oc.textBaseline = 'middle';
+        oc.fillText(countdownValue.toString(), VIRTUAL_W / 2, VIRTUAL_H / 2);
+        oc.globalAlpha = 1;
     }
 
     // ── Interpolation ────────────────────────────────────────────
@@ -1413,13 +1454,11 @@
         if (!gameState) return null;
         if (!prevGameState || !prevStateTimestamp) return gameState;
 
-        // t = how far we are between prev and current state (0..1, can exceed 1)
         const elapsed = now - stateTimestamp;
         const interval = stateTimestamp - prevStateTimestamp;
         if (interval <= 0) return gameState;
-        const t = Math.min(1 + elapsed / interval, 2); // clamp to avoid wild extrapolation
+        const t = Math.min(1 + elapsed / interval, 2);
 
-        // Build interpolated state
         const lerped = { ...gameState };
 
         // Lerp players
@@ -1438,7 +1477,23 @@
             });
         }
 
-        // Lerp arrows
+        // Lerp dogs (if present)
+        if (gameState.dogs && prevGameState.dogs) {
+            const prevMap = {};
+            for (const d of prevGameState.dogs) prevMap[d.id] = d;
+
+            lerped.dogs = gameState.dogs.map(d => {
+                const prev = prevMap[d.id];
+                if (!prev) return d;
+                return {
+                    ...d,
+                    x: prev.x + (d.x - prev.x) * t,
+                    y: prev.y + (d.y - prev.y) * t,
+                };
+            });
+        }
+
+        // Lerp arrows (legacy support for Arrow-style games)
         if (gameState.arrows && prevGameState.arrows) {
             const prevMap = {};
             for (const a of prevGameState.arrows) prevMap[a.id] = a;
@@ -1490,34 +1545,43 @@
             handleEdgeScroll();
             updateCamera();
 
-            // Clear canvas (before zoom transform)
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.fillStyle = '#12141a';
-            ctx.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
+            // ── Game rendering (mode-dependent) ──
+            if (rendererMode === '2d') {
+                // 2D MODE: Framework manages canvas transforms, passes ctx
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.fillStyle = '#12141a';
+                ctx.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
+                ctx.setTransform(camera.zoom, 0, 0, camera.zoom, 0, 0);
 
-            // Apply zoom transform
-            ctx.setTransform(camera.zoom, 0, 0, camera.zoom, 0, 0);
-
-            // Game render (in zoomed space) — pass interpolated state
-            if (window.GameDef && window.GameDef.render) {
-                window.GameDef.render(ctx, camera, renderState);
+                if (window.GameDef && window.GameDef.render) {
+                    window.GameDef.render(ctx, camera, renderState);
+                }
+            } else {
+                // 3D MODE: Game handles its own rendering entirely
+                // Framework just calls render(camera, state) — no ctx
+                if (window.GameDef && window.GameDef.render) {
+                    window.GameDef.render(camera, renderState);
+                }
             }
 
-            // Pings (in zoomed space)
-            renderPings(ctx);
+            // ── Overlay rendering (always 2D, on overlay canvas) ──
+            overlayCtx.clearRect(0, 0, VIRTUAL_W, VIRTUAL_H);
 
-            // Reset transform for HUD elements (ping wheel, countdown)
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            // Pings render in zoomed world space
+            overlayCtx.setTransform(camera.zoom, 0, 0, camera.zoom, 0, 0);
+            renderPings(overlayCtx);
 
-            // Ping wheel (screen space)
-            renderPingWheel(ctx);
+            // Ping wheel and countdown render in screen space
+            overlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+            renderPingWheel(overlayCtx);
+            renderCountdown(overlayCtx);
 
-            // Countdown overlay (screen space)
-            renderCountdown(ctx);
         } else if (gamePhase === 'menu' || gamePhase === 'lobby') {
-            // Ambient dark background
-            ctx.fillStyle = '#12141a';
-            ctx.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
+            // Ambient dark background (only in 2D mode or if game hasn't initialized 3D)
+            if (rendererMode === '2d' && ctx) {
+                ctx.fillStyle = '#12141a';
+                ctx.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
+            }
         }
 
         requestAnimationFrame(gameLoop);
@@ -1590,6 +1654,9 @@
         showTooltip,
         hideTooltip,
         escapeHtml,
+        rendererMode: () => rendererMode,
+        getCanvas: () => canvas,
+        getOverlayCanvas: () => overlayCanvas,
     };
 
 })();
