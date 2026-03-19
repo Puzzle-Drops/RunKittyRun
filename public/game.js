@@ -1,10 +1,10 @@
-// Run Kitty Run! — Client-side game code
+// Run Kitty Run! — Client-side 3D game code (Three.js)
 
 (function () {
     'use strict';
 
     // ═══════════════════════════════════════════════════════════
-    // CONSTANTS (mirrored from server for rendering)
+    // CONSTANTS
     // ═══════════════════════════════════════════════════════════
 
     const WORLD_WIDTH = 4800;
@@ -13,25 +13,186 @@
     const CORRIDOR_WIDTH = 400;
     const KITTEN_RADIUS = 16;
     const DOG_RADIUS = 18;
-    const GRID_SIZE = 80;
+
+    const CAM_BASE_HEIGHT = 1100;
+    const CAM_TILT_FACTOR = 0.45;
+    const CAM_FOV = 50;
 
     // ═══════════════════════════════════════════════════════════
-    // MAZE GENERATION (same algorithm as server)
+    // SOUND SYSTEM
+    // ═══════════════════════════════════════════════════════════
+
+    const SFX = {
+        ctx: null,
+        initialized: false,
+
+        init() {
+            if (this.initialized) return;
+            try {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.initialized = true;
+            } catch (e) { }
+        },
+
+        play(type) {
+            if (!this.ctx) this.init();
+            if (!this.ctx) return;
+            const c = this.ctx;
+            const now = c.currentTime;
+
+            try {
+                switch (type) {
+                    case 'caught': {
+                        const o = c.createOscillator();
+                        const g = c.createGain();
+                        o.connect(g); g.connect(c.destination);
+                        o.type = 'sine';
+                        o.frequency.setValueAtTime(950, now);
+                        o.frequency.exponentialRampToValueAtTime(180, now + 0.45);
+                        g.gain.setValueAtTime(0.18, now);
+                        g.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+                        o.start(now); o.stop(now + 0.45);
+                        const o2 = c.createOscillator();
+                        const g2 = c.createGain();
+                        o2.connect(g2); g2.connect(c.destination);
+                        o2.type = 'triangle';
+                        o2.frequency.setValueAtTime(1200, now);
+                        o2.frequency.exponentialRampToValueAtTime(250, now + 0.35);
+                        g2.gain.setValueAtTime(0.06, now);
+                        g2.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                        o2.start(now); o2.stop(now + 0.35);
+                        break;
+                    }
+                    case 'revived': {
+                        [520, 660, 780, 1040].forEach((freq, i) => {
+                            const o = c.createOscillator();
+                            const g = c.createGain();
+                            o.connect(g); g.connect(c.destination);
+                            o.type = 'sine';
+                            const t = now + i * 0.08;
+                            o.frequency.setValueAtTime(freq, t);
+                            g.gain.setValueAtTime(0.1, t);
+                            g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+                            o.start(t); o.stop(t + 0.25);
+                        });
+                        break;
+                    }
+                    case 'goal': {
+                        [523, 659, 784, 1047].forEach((freq, i) => {
+                            const o = c.createOscillator();
+                            const g = c.createGain();
+                            o.connect(g); g.connect(c.destination);
+                            o.type = i < 2 ? 'sine' : 'triangle';
+                            o.frequency.setValueAtTime(freq, now);
+                            g.gain.setValueAtTime(0.08, now);
+                            g.gain.linearRampToValueAtTime(0.06, now + 0.3);
+                            g.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
+                            o.start(now); o.stop(now + 1.2);
+                        });
+                        break;
+                    }
+                    case 'bark': {
+                        const o = c.createOscillator();
+                        const g = c.createGain();
+                        o.connect(g); g.connect(c.destination);
+                        o.type = 'sawtooth';
+                        o.frequency.setValueAtTime(220, now);
+                        o.frequency.exponentialRampToValueAtTime(120, now + 0.12);
+                        g.gain.setValueAtTime(0.06, now);
+                        g.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+                        o.start(now); o.stop(now + 0.15);
+                        break;
+                    }
+                }
+            } catch (e) { }
+        }
+    };
+
+    // ═══════════════════════════════════════════════════════════
+    // THREE.JS STATE
+    // ═══════════════════════════════════════════════════════════
+
+    let scene, renderer3d, camera3d;
+    let ambientLight, dirLight, goalLight;
+    let kittenMeshes = {};
+    let dogMeshes = {};
+    let deathMarkers = {};
+    let goalPulse = 0;
+    let mazeZones = [];
+    let frameTick = 0;
+    let rendererReady = false;
+    let mouseCanvasX = 0, mouseCanvasY = 0;
+    let lastBarkTick = 0;
+
+    const gameCanvas = document.getElementById('game-canvas');
+    document.getElementById('game-container').addEventListener('mousemove', (e) => {
+        const rect = gameCanvas.getBoundingClientRect();
+        mouseCanvasX = (e.clientX - rect.left) * (1920 / rect.width);
+        mouseCanvasY = (e.clientY - rect.top) * (1080 / rect.height);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // SHARED GEOMETRIES & MATERIALS
+    // ═══════════════════════════════════════════════════════════
+
+    let GEO = null;
+    let MAT = null;
+
+    function initSharedAssets() {
+        GEO = {
+            kittenBody: new THREE.SphereGeometry(11, 12, 8),
+            kittenHead: new THREE.SphereGeometry(7.5, 10, 8),
+            kittenEar: new THREE.ConeGeometry(3.2, 7, 4),
+            kittenEye: new THREE.SphereGeometry(1.8, 6, 6),
+            kittenPupil: new THREE.SphereGeometry(1.0, 6, 6),
+            kittenNose: new THREE.SphereGeometry(1.2, 6, 6),
+            kittenTail: new THREE.CylinderGeometry(1.5, 0.5, 18, 6),
+            dogBody: new THREE.SphereGeometry(14, 12, 8),
+            dogHead: new THREE.SphereGeometry(9, 10, 8),
+            dogEar: new THREE.SphereGeometry(5, 8, 6),
+            dogSnout: new THREE.SphereGeometry(5, 8, 6),
+            dogNose: new THREE.SphereGeometry(2, 6, 6),
+            dogEye: new THREE.SphereGeometry(2, 6, 6),
+            dogTail: new THREE.CylinderGeometry(2, 1, 12, 6),
+            shadow: new THREE.CircleGeometry(16, 16),
+            deathRing: new THREE.RingGeometry(14, 22, 24),
+            deathInner: new THREE.CircleGeometry(14, 24),
+            paw: new THREE.SphereGeometry(3, 6, 6),
+            pawToe: new THREE.SphereGeometry(1.8, 5, 5),
+        };
+
+        MAT = {
+            shadow: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false }),
+            dogBody: new THREE.MeshPhongMaterial({ color: 0x8B6914, shininess: 20 }),
+            dogDark: new THREE.MeshPhongMaterial({ color: 0x6B4E10, shininess: 10 }),
+            dogLight: new THREE.MeshPhongMaterial({ color: 0xC4A060, shininess: 30 }),
+            dogNose: new THREE.MeshPhongMaterial({ color: 0x222222, shininess: 60 }),
+            dogEye: new THREE.MeshPhongMaterial({ color: 0x1a1008, shininess: 40 }),
+            eyeWhite: new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 60 }),
+            pupil: new THREE.MeshPhongMaterial({ color: 0x111111, shininess: 40 }),
+            nosePink: new THREE.MeshPhongMaterial({ color: 0xffaaaa, shininess: 40 }),
+            safeGround: new THREE.MeshPhongMaterial({ color: 0x2d6b1e, shininess: 5 }),
+            dangerGround: new THREE.MeshPhongMaterial({ color: 0x8a7040, shininess: 5 }),
+            goalGround: new THREE.MeshPhongMaterial({ color: 0xaa8828, shininess: 15, emissive: 0x443300, emissiveIntensity: 0.3 }),
+            voidGround: new THREE.MeshPhongMaterial({ color: 0x0a0a12, shininess: 0 }),
+            zoneBorder: new THREE.MeshBasicMaterial({ color: 0x88ff66, transparent: true, opacity: 0.15, depthWrite: false }),
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // MAZE GENERATION (mirrors server algorithm)
     // ═══════════════════════════════════════════════════════════
 
     function generateMazeClient() {
         const result = [];
         const step = CORRIDOR_WIDTH + WALL_THICKNESS;
         let order = 0;
-
         let r = 0;
-        while (true) {
-            const L = r * step;
-            const T = r * step;
-            const R = WORLD_WIDTH - r * step;
-            const B = WORLD_HEIGHT - r * step;
-            const CW = CORRIDOR_WIDTH;
 
+        while (true) {
+            const L = r * step, T = r * step;
+            const R = WORLD_WIDTH - r * step, B = WORLD_HEIGHT - r * step;
+            const CW = CORRIDOR_WIDTH;
             if (R - L <= 2 * CW) break;
 
             result.push({ type: 'safe', x: L, y: T, w: CW, h: CW, order: order++ });
@@ -43,12 +204,10 @@
             result.push({ type: 'safe', x: L, y: B - CW, w: CW, h: CW, order: order++ });
 
             const nextRingTop = (r + 1) * step;
-            const leftTop = nextRingTop + CW;
-            const leftBottom = B - CW;
+            const leftTop = nextRingTop + CW, leftBottom = B - CW;
             if (leftBottom > leftTop) {
                 result.push({ type: 'danger', x: L, y: leftTop, w: CW, h: leftBottom - leftTop, order: order++ });
             }
-
             result.push({ type: 'safe', x: L, y: nextRingTop, w: CW + WALL_THICKNESS, h: CW, order: order++ });
             r++;
         }
@@ -58,383 +217,406 @@
         if (gR > gL && gB > gT) {
             result.push({ type: 'goal', x: gL, y: gT, w: gR - gL, h: gB - gT, order: order++ });
         }
-
         return result;
     }
 
     // ═══════════════════════════════════════════════════════════
-    // CLIENT STATE
+    // MODEL FACTORIES
     // ═══════════════════════════════════════════════════════════
 
-    let mazeZones = [];
-    let mouseCanvasX = 0, mouseCanvasY = 0;
-    let frameTick = 0;
-
-    const canvas = document.getElementById('game-canvas');
-    document.getElementById('game-container').addEventListener('mousemove', (e) => {
-        const rect = canvas.getBoundingClientRect();
-        mouseCanvasX = (e.clientX - rect.left) * (1920 / rect.width);
-        mouseCanvasY = (e.clientY - rect.top) * (1080 / rect.height);
-    });
-
-    // ═══════════════════════════════════════════════════════════
-    // COLOR PALETTE
-    // ═══════════════════════════════════════════════════════════
-
-    const COLORS = {
-        void: '#08080e',
-        voidEdge: 'rgba(80, 20, 30, 0.4)',
-        safeGround: '#2a5e1e',
-        safeLight: '#347228',
-        safeBorder: 'rgba(100, 200, 80, 0.3)',
-        dangerGround: '#7a6535',
-        dangerLight: '#8a7545',
-        dangerBorder: 'rgba(200, 150, 60, 0.3)',
-        goalGround: '#8a7020',
-        goalGlow: 'rgba(220, 180, 40, 0.15)',
-        goalBorder: 'rgba(255, 220, 80, 0.5)',
-        grid: 'rgba(255, 255, 255, 0.018)',
-        dogBody: '#8B6914',
-        dogDark: '#6B4E10',
-        dogLight: '#A88030',
-        dogNose: '#222',
-    };
-
-    // ═══════════════════════════════════════════════════════════
-    // DRAWING HELPERS
-    // ═══════════════════════════════════════════════════════════
-
-    function drawKitten(ctx, x, y, angle, color, radius, invuln) {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(angle);
+    function createKittenModel(color) {
+        const group = new THREE.Group();
+        const col = new THREE.Color(color);
+        const bodyMat = new THREE.MeshPhongMaterial({ color: col, shininess: 25 });
+        const lightCol = col.clone().lerp(new THREE.Color(0xffffff), 0.3);
+        const chestMat = new THREE.MeshPhongMaterial({ color: lightCol, shininess: 20 });
+        const earInnerMat = new THREE.MeshPhongMaterial({
+            color: lightCol.clone().lerp(new THREE.Color(0xffcccc), 0.3), shininess: 15
+        });
 
         // Shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.25)';
-        ctx.beginPath();
-        ctx.ellipse(0, 5, radius + 3, radius * 0.45, 0, 0, Math.PI * 2);
-        ctx.fill();
+        const shadow = new THREE.Mesh(GEO.shadow, MAT.shadow);
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.position.y = 0.2;
+        group.add(shadow);
 
-        // Tail (behind body)
-        const tailWag = Math.sin(frameTick * 0.15) * 0.3;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(-radius * 0.7, 0);
-        ctx.quadraticCurveTo(
-            -radius * 1.4, -radius * 0.4 + tailWag * radius,
-            -radius * 1.1, -radius * 0.9 + tailWag * radius
-        );
-        ctx.stroke();
+        // Body
+        const body = new THREE.Mesh(GEO.kittenBody, bodyMat);
+        body.scale.set(1, 0.75, 0.88);
+        body.position.y = 9;
+        group.add(body);
 
-        // Body (oval)
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.ellipse(0, 0, radius, radius * 0.72, 0, 0, Math.PI * 2);
-        ctx.fill();
+        // Head
+        const head = new THREE.Mesh(GEO.kittenHead, bodyMat);
+        head.position.set(10, 12, 0);
+        group.add(head);
 
-        // Lighter chest
-        ctx.fillStyle = lightenColor(color, 0.35);
-        ctx.beginPath();
-        ctx.ellipse(radius * 0.15, 0, radius * 0.4, radius * 0.35, 0, 0, Math.PI * 2);
-        ctx.fill();
+        // Chest
+        const chest = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 6), chestMat);
+        chest.position.set(4, 7, 0);
+        group.add(chest);
 
         // Left ear
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(radius * 0.3, -radius * 0.55);
-        ctx.lineTo(radius * 0.95, -radius * 1.1);
-        ctx.lineTo(radius * 0.75, -radius * 0.35);
-        ctx.closePath();
-        ctx.fill();
-        // Inner ear
-        ctx.fillStyle = lightenColor(color, 0.5);
-        ctx.beginPath();
-        ctx.moveTo(radius * 0.45, -radius * 0.55);
-        ctx.lineTo(radius * 0.85, -radius * 0.9);
-        ctx.lineTo(radius * 0.7, -radius * 0.4);
-        ctx.closePath();
-        ctx.fill();
+        const earL = new THREE.Mesh(GEO.kittenEar, bodyMat);
+        earL.position.set(12, 19, -4);
+        earL.rotation.z = 0.2;
+        group.add(earL);
+        const earLI = new THREE.Mesh(new THREE.ConeGeometry(1.8, 4, 4), earInnerMat);
+        earLI.position.set(12, 18.5, -4);
+        earLI.rotation.z = 0.2;
+        group.add(earLI);
 
         // Right ear
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(radius * 0.3, radius * 0.55);
-        ctx.lineTo(radius * 0.95, radius * 1.1);
-        ctx.lineTo(radius * 0.75, radius * 0.35);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = lightenColor(color, 0.5);
-        ctx.beginPath();
-        ctx.moveTo(radius * 0.45, radius * 0.55);
-        ctx.lineTo(radius * 0.85, radius * 0.9);
-        ctx.lineTo(radius * 0.7, radius * 0.4);
-        ctx.closePath();
-        ctx.fill();
+        const earR = new THREE.Mesh(GEO.kittenEar, bodyMat);
+        earR.position.set(12, 19, 4);
+        earR.rotation.z = -0.2;
+        group.add(earR);
+        const earRI = new THREE.Mesh(new THREE.ConeGeometry(1.8, 4, 4), earInnerMat);
+        earRI.position.set(12, 18.5, 4);
+        earRI.rotation.z = -0.2;
+        group.add(earRI);
 
         // Eyes
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(radius * 0.45, -radius * 0.2, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(radius * 0.45, radius * 0.2, 3, 0, Math.PI * 2);
-        ctx.fill();
-        // Pupils
-        ctx.fillStyle = '#111';
-        ctx.beginPath();
-        ctx.arc(radius * 0.48, -radius * 0.2, 1.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(radius * 0.48, radius * 0.2, 1.5, 0, Math.PI * 2);
-        ctx.fill();
+        const eyeL = new THREE.Mesh(GEO.kittenEye, MAT.eyeWhite);
+        eyeL.position.set(15, 13, -3);
+        group.add(eyeL);
+        const eyeR = new THREE.Mesh(GEO.kittenEye, MAT.eyeWhite);
+        eyeR.position.set(15, 13, 3);
+        group.add(eyeR);
+        const pupL = new THREE.Mesh(GEO.kittenPupil, MAT.pupil);
+        pupL.position.set(16.2, 13, -3);
+        group.add(pupL);
+        const pupR = new THREE.Mesh(GEO.kittenPupil, MAT.pupil);
+        pupR.position.set(16.2, 13, 3);
+        group.add(pupR);
 
         // Nose
-        ctx.fillStyle = lightenColor(color, 0.6);
-        ctx.beginPath();
-        ctx.arc(radius * 0.7, 0, 2, 0, Math.PI * 2);
-        ctx.fill();
+        const nose = new THREE.Mesh(GEO.kittenNose, MAT.nosePink);
+        nose.position.set(16.5, 11, 0);
+        group.add(nose);
 
-        // Invuln shimmer
-        if (invuln > 0) {
-            ctx.globalAlpha = 0.4 + Math.sin(frameTick * 0.5) * 0.2;
-            ctx.fillStyle = '#fff';
-            ctx.beginPath();
-            ctx.ellipse(0, 0, radius + 4, radius * 0.8 + 4, 0, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.globalAlpha = 1;
-        }
+        // Tail
+        const tail = new THREE.Mesh(GEO.kittenTail, bodyMat);
+        tail.position.set(-14, 12, 0);
+        tail.rotation.z = Math.PI / 4;
+        tail.name = 'tail';
+        group.add(tail);
 
-        ctx.restore();
+        group.userData = { bodyMat, color };
+        return group;
     }
 
-    function drawDog(ctx, x, y, angle, radius, isIdle) {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(angle);
-
-        const bob = isIdle ? Math.sin(frameTick * 0.08) * 2 : 0;
+    function createDogModel() {
+        const group = new THREE.Group();
 
         // Shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.25)';
-        ctx.beginPath();
-        ctx.ellipse(0, 6, radius + 4, radius * 0.45, 0, 0, Math.PI * 2);
-        ctx.fill();
+        const shadow = new THREE.Mesh(new THREE.CircleGeometry(20, 16), MAT.shadow);
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.position.y = 0.2;
+        group.add(shadow);
 
-        // Tail stub
-        ctx.strokeStyle = COLORS.dogBody;
-        ctx.lineWidth = 4;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(-radius * 0.7, 0);
-        ctx.lineTo(-radius * 1.0, -radius * 0.3 + Math.sin(frameTick * 0.2) * 3);
-        ctx.stroke();
+        // Body
+        const body = new THREE.Mesh(GEO.dogBody, MAT.dogBody);
+        body.scale.set(1.1, 0.75, 0.85);
+        body.position.y = 11;
+        group.add(body);
 
-        // Body (larger oval)
-        ctx.fillStyle = COLORS.dogBody;
-        ctx.beginPath();
-        ctx.ellipse(0, bob, radius, radius * 0.75, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Darker back stripe
-        ctx.fillStyle = COLORS.dogDark;
-        ctx.beginPath();
-        ctx.ellipse(-radius * 0.15, bob - radius * 0.1, radius * 0.5, radius * 0.2, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Floppy left ear
-        ctx.fillStyle = COLORS.dogDark;
-        ctx.beginPath();
-        ctx.ellipse(radius * 0.3, -radius * 0.7 + bob, radius * 0.3, radius * 0.5, -0.3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Floppy right ear
-        ctx.beginPath();
-        ctx.ellipse(radius * 0.3, radius * 0.7 + bob, radius * 0.3, radius * 0.5, 0.3, 0, Math.PI * 2);
-        ctx.fill();
+        // Head
+        const head = new THREE.Mesh(GEO.dogHead, MAT.dogBody);
+        head.position.set(14, 14, 0);
+        group.add(head);
 
         // Snout
-        ctx.fillStyle = COLORS.dogLight;
-        ctx.beginPath();
-        ctx.ellipse(radius * 0.65, bob, radius * 0.35, radius * 0.28, 0, 0, Math.PI * 2);
-        ctx.fill();
+        const snout = new THREE.Mesh(GEO.dogSnout, MAT.dogLight);
+        snout.scale.set(1, 0.7, 0.8);
+        snout.position.set(20, 12, 0);
+        group.add(snout);
 
         // Nose
-        ctx.fillStyle = COLORS.dogNose;
-        ctx.beginPath();
-        ctx.arc(radius * 0.85, bob, 3, 0, Math.PI * 2);
-        ctx.fill();
+        const dNose = new THREE.Mesh(GEO.dogNose, MAT.dogNose);
+        dNose.position.set(24, 13, 0);
+        group.add(dNose);
+
+        // Left ear (floppy)
+        const earL = new THREE.Mesh(GEO.dogEar, MAT.dogDark);
+        earL.scale.set(1, 0.5, 0.7);
+        earL.position.set(10, 16, -8);
+        group.add(earL);
+
+        // Right ear (floppy)
+        const earR = new THREE.Mesh(GEO.dogEar, MAT.dogDark);
+        earR.scale.set(1, 0.5, 0.7);
+        earR.position.set(10, 16, 8);
+        group.add(earR);
 
         // Eyes
-        ctx.fillStyle = '#222';
-        ctx.beginPath();
-        ctx.arc(radius * 0.4, -radius * 0.2 + bob, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(radius * 0.4, radius * 0.2 + bob, 2.5, 0, Math.PI * 2);
-        ctx.fill();
+        const eyeL = new THREE.Mesh(GEO.dogEye, MAT.dogEye);
+        eyeL.position.set(19, 16, -4);
+        group.add(eyeL);
+        const eyeR = new THREE.Mesh(GEO.dogEye, MAT.dogEye);
+        eyeR.position.set(19, 16, 4);
+        group.add(eyeR);
 
-        ctx.restore();
+        // Tail
+        const tail = new THREE.Mesh(GEO.dogTail, MAT.dogBody);
+        tail.position.set(-16, 14, 0);
+        tail.rotation.z = Math.PI / 3;
+        tail.name = 'tail';
+        group.add(tail);
+
+        return group;
     }
 
-    function drawDeathMarker(ctx, x, y, color) {
-        const pulse = 0.8 + Math.sin(frameTick * 0.06) * 0.2;
-        const alphaBase = 0.4 + Math.sin(frameTick * 0.06) * 0.15;
+    function createDeathMarkerModel(color) {
+        const group = new THREE.Group();
+        const col = new THREE.Color(color);
 
-        // Outer glow
-        ctx.globalAlpha = alphaBase * 0.3;
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(x, y, 30 * pulse, 0, Math.PI * 2);
-        ctx.fill();
+        const ringMat = new THREE.MeshBasicMaterial({
+            color: col, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false
+        });
+        const ring = new THREE.Mesh(GEO.deathRing, ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.5;
+        group.add(ring);
 
-        // Inner circle
-        ctx.globalAlpha = alphaBase;
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(x, y, 18 * pulse, 0, Math.PI * 2);
-        ctx.fill();
+        const innerMat = new THREE.MeshBasicMaterial({
+            color: col, transparent: true, opacity: 0.25, depthWrite: false
+        });
+        const inner = new THREE.Mesh(GEO.deathInner, innerMat);
+        inner.rotation.x = -Math.PI / 2;
+        inner.position.y = 0.4;
+        group.add(inner);
 
-        // Border
-        ctx.globalAlpha = alphaBase + 0.2;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, 18 * pulse, 0, Math.PI * 2);
-        ctx.stroke();
+        // Paw print
+        const pawMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
+        const pad = new THREE.Mesh(GEO.paw, pawMat);
+        pad.scale.y = 0.3;
+        pad.position.set(0, 1, 2);
+        group.add(pad);
 
-        // Paw print icon (simplified)
-        ctx.globalAlpha = alphaBase + 0.1;
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(x, y + 2, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x - 5, y - 4, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x + 5, y - 4, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x, y - 7, 2.5, 0, Math.PI * 2);
-        ctx.fill();
+        [[-4, 1, -3], [4, 1, -3], [0, 1, -6]].forEach(pos => {
+            const toe = new THREE.Mesh(GEO.pawToe, pawMat);
+            toe.scale.y = 0.3;
+            toe.position.set(pos[0], pos[1], pos[2]);
+            group.add(toe);
+        });
 
-        ctx.globalAlpha = 1;
-    }
-
-    function lightenColor(hex, amount) {
-        let r, g, b;
-        if (hex.startsWith('#')) {
-            r = parseInt(hex.slice(1, 3), 16);
-            g = parseInt(hex.slice(3, 5), 16);
-            b = parseInt(hex.slice(5, 7), 16);
-        } else {
-            return hex;
-        }
-        r = Math.min(255, r + (255 - r) * amount);
-        g = Math.min(255, g + (255 - g) * amount);
-        b = Math.min(255, b + (255 - b) * amount);
-        return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
-    }
-
-    function esc(str) {
-        return window.PDROP.escapeHtml(str);
+        group.userData = { ringMat, innerMat };
+        return group;
     }
 
     // ═══════════════════════════════════════════════════════════
-    // ZONE RENDERING
+    // SCENE BUILDING
     // ═══════════════════════════════════════════════════════════
 
-    function drawZones(ctx, cx, cy, vw, vh) {
-        // Void background (already filled by framework, but ensure coverage)
-        ctx.fillStyle = COLORS.void;
-        ctx.fillRect(0, 0, vw, vh);
+    function buildMazeScene() {
+        mazeZones = generateMazeClient();
 
-        // Draw each zone
+        // Void ground
+        const voidGeo = new THREE.PlaneGeometry(WORLD_WIDTH * 1.5, WORLD_HEIGHT * 1.5);
+        const voidMesh = new THREE.Mesh(voidGeo, MAT.voidGround);
+        voidMesh.rotation.x = -Math.PI / 2;
+        voidMesh.position.set(WORLD_WIDTH / 2, -3, WORLD_HEIGHT / 2);
+        scene.add(voidMesh);
+
+        // Zone platforms
         for (const z of mazeZones) {
-            const sx = z.x - cx;
-            const sy = z.y - cy;
+            let mat;
+            if (z.type === 'safe') mat = MAT.safeGround;
+            else if (z.type === 'danger') mat = MAT.dangerGround;
+            else if (z.type === 'goal') mat = MAT.goalGround;
+            else continue;
 
-            // Cull off-screen zones
-            if (sx + z.w < 0 || sx > vw || sy + z.h < 0 || sy > vh) continue;
+            const topGeo = new THREE.PlaneGeometry(z.w, z.h);
+            const topMesh = new THREE.Mesh(topGeo, mat);
+            topMesh.rotation.x = -Math.PI / 2;
+            topMesh.position.set(z.x + z.w / 2, 0.1, z.y + z.h / 2);
+            scene.add(topMesh);
 
-            // Zone fill
-            if (z.type === 'safe') {
-                ctx.fillStyle = COLORS.safeGround;
-                ctx.fillRect(sx, sy, z.w, z.h);
-                // Subtle lighter patches
-                ctx.fillStyle = COLORS.safeLight;
-                for (let px = 0; px < z.w; px += 40) {
-                    for (let py = 0; py < z.h; py += 40) {
-                        if ((px + py + z.x + z.y) % 80 < 40) {
-                            ctx.fillRect(sx + px, sy + py, 20, 20);
-                        }
-                    }
-                }
-            } else if (z.type === 'danger') {
-                ctx.fillStyle = COLORS.dangerGround;
-                ctx.fillRect(sx, sy, z.w, z.h);
-                ctx.fillStyle = COLORS.dangerLight;
-                for (let px = 0; px < z.w; px += 60) {
-                    for (let py = 0; py < z.h; py += 60) {
-                        if ((px + py + z.x) % 120 < 60) {
-                            ctx.fillRect(sx + px, sy + py, 30, 30);
-                        }
-                    }
-                }
-            } else if (z.type === 'goal') {
-                // Golden base
-                ctx.fillStyle = COLORS.goalGround;
-                ctx.fillRect(sx, sy, z.w, z.h);
-                // Pulsing glow
-                const glowAlpha = 0.08 + Math.sin(frameTick * 0.04) * 0.05;
-                const gcx = sx + z.w / 2;
-                const gcy = sy + z.h / 2;
-                const gr = Math.max(z.w, z.h) * 0.6;
-                const grad = ctx.createRadialGradient(gcx, gcy, 0, gcx, gcy, gr);
-                grad.addColorStop(0, `rgba(255, 220, 60, ${glowAlpha + 0.1})`);
-                grad.addColorStop(1, 'transparent');
-                ctx.fillStyle = grad;
-                ctx.fillRect(sx, sy, z.w, z.h);
+            // Edge glow for safe/goal zones
+            if (z.type === 'safe' || z.type === 'goal') {
+                const borderGeo = new THREE.PlaneGeometry(z.w + 4, z.h + 4);
+                const borderMat = z.type === 'goal'
+                    ? new THREE.MeshBasicMaterial({ color: 0xffdd44, transparent: true, opacity: 0.12, depthWrite: false })
+                    : MAT.zoneBorder;
+                const border = new THREE.Mesh(borderGeo, borderMat);
+                border.rotation.x = -Math.PI / 2;
+                border.position.set(z.x + z.w / 2, 0.05, z.y + z.h / 2);
+                scene.add(border);
+            }
+        }
+
+        // Goal zone light
+        const goalZone = mazeZones.find(z => z.type === 'goal');
+        if (goalZone) {
+            goalLight = new THREE.PointLight(0xffcc44, 0.6, 800);
+            goalLight.position.set(goalZone.x + goalZone.w / 2, 60, goalZone.y + goalZone.h / 2);
+            scene.add(goalLight);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ENTITY RECONCILIATION
+    // ═══════════════════════════════════════════════════════════
+
+    function reconcileKittens(players) {
+        const currentIds = new Set(players.map(p => p.id));
+
+        for (const id of Object.keys(kittenMeshes)) {
+            if (!currentIds.has(id)) {
+                scene.remove(kittenMeshes[id]);
+                delete kittenMeshes[id];
+            }
+        }
+
+        for (const p of players) {
+            if (!kittenMeshes[p.id]) {
+                kittenMeshes[p.id] = createKittenModel(p.color);
+                scene.add(kittenMeshes[p.id]);
             }
 
-            // Zone border (edge highlight)
-            let borderColor = COLORS.safeBorder;
-            if (z.type === 'danger') borderColor = COLORS.dangerBorder;
-            if (z.type === 'goal') borderColor = COLORS.goalBorder;
-            ctx.strokeStyle = borderColor;
-            ctx.lineWidth = 1.5;
-            ctx.strokeRect(sx + 0.5, sy + 0.5, z.w - 1, z.h - 1);
+            const mesh = kittenMeshes[p.id];
+            mesh.visible = p.alive;
+
+            if (p.alive) {
+                mesh.position.set(p.x, 0, p.y);
+                mesh.rotation.y = -p.angle + Math.PI / 2;
+
+                // Tail wag
+                const tail = mesh.getObjectByName('tail');
+                if (tail) tail.rotation.x = Math.sin(frameTick * 0.15) * 0.4;
+
+                // Invuln pulse
+                if (p.invulnTicks > 0) {
+                    const s = 1 + Math.sin(frameTick * 0.5) * 0.15;
+                    mesh.scale.set(s, s, s);
+                } else {
+                    mesh.scale.set(1, 1, 1);
+                }
+            }
         }
     }
 
-    function drawGrid(ctx, cx, cy, vw, vh) {
-        ctx.strokeStyle = COLORS.grid;
-        ctx.lineWidth = 1;
-        const startCol = Math.floor(cx / GRID_SIZE);
-        const endCol = Math.ceil((cx + vw) / GRID_SIZE);
-        const startRow = Math.floor(cy / GRID_SIZE);
-        const endRow = Math.ceil((cy + vh) / GRID_SIZE);
-        for (let c = startCol; c <= endCol; c++) {
-            const sx = c * GRID_SIZE - cx;
-            ctx.beginPath();
-            ctx.moveTo(sx, 0);
-            ctx.lineTo(sx, vh);
-            ctx.stroke();
+    function reconcileDogs(dogs) {
+        if (!dogs) return;
+        const currentIds = new Set(dogs.map(d => d.id));
+
+        for (const id of Object.keys(dogMeshes)) {
+            if (!currentIds.has(parseInt(id))) {
+                scene.remove(dogMeshes[id]);
+                delete dogMeshes[id];
+            }
         }
-        for (let r = startRow; r <= endRow; r++) {
-            const sy = r * GRID_SIZE - cy;
-            ctx.beginPath();
-            ctx.moveTo(0, sy);
-            ctx.lineTo(vw, sy);
-            ctx.stroke();
+
+        for (const d of dogs) {
+            if (!dogMeshes[d.id]) {
+                dogMeshes[d.id] = createDogModel();
+                scene.add(dogMeshes[d.id]);
+            }
+
+            const mesh = dogMeshes[d.id];
+            const isIdle = d.s === 0;
+
+            mesh.position.set(d.x, isIdle ? Math.sin(frameTick * 0.06 + d.id) * 1.5 : 0, d.y);
+            mesh.rotation.y = -d.angle + Math.PI / 2;
+
+            const tail = mesh.getObjectByName('tail');
+            if (tail) {
+                tail.rotation.x = Math.sin(frameTick * (isIdle ? 0.1 : 0.25) + d.id * 3) * 0.5;
+            }
         }
     }
 
+    function reconcileDeathMarkers(players) {
+        const deadPlayers = players.filter(p => !p.alive && p.deathX !== null);
+        const deadIds = new Set(deadPlayers.map(p => p.id));
+
+        for (const id of Object.keys(deathMarkers)) {
+            if (!deadIds.has(id)) {
+                scene.remove(deathMarkers[id]);
+                delete deathMarkers[id];
+            }
+        }
+
+        for (const p of deadPlayers) {
+            if (!deathMarkers[p.id]) {
+                deathMarkers[p.id] = createDeathMarkerModel(p.color);
+                scene.add(deathMarkers[p.id]);
+            }
+
+            const mesh = deathMarkers[p.id];
+            mesh.position.set(p.deathX, 0.3, p.deathY);
+
+            const pulse = 0.85 + Math.sin(frameTick * 0.05) * 0.15;
+            mesh.scale.set(pulse, 1, pulse);
+
+            const ud = mesh.userData;
+            if (ud.ringMat) ud.ringMat.opacity = 0.35 + Math.sin(frameTick * 0.05) * 0.15;
+            if (ud.innerMat) ud.innerMat.opacity = 0.15 + Math.sin(frameTick * 0.05) * 0.1;
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════
-    // HUD UPDATES
+    // PROXIMITY BARK SOUNDS
+    // ═══════════════════════════════════════════════════════════
+
+    function checkDogProximity(gameState) {
+        if (!gameState || !gameState.dogs) return;
+        const lp = gameState.players?.find(p => p.id === window.PDROP.getLocalPlayerId());
+        if (!lp || !lp.alive) return;
+        if (frameTick - lastBarkTick < 60) return;
+
+        for (const d of gameState.dogs) {
+            const dist = Math.hypot(d.x - lp.x, d.y - lp.y);
+            if (dist < 120 && d.s === 1 && Math.random() < 0.3) {
+                SFX.play('bark');
+                lastBarkTick = frameTick;
+                break;
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // NAME LABELS (drawn on overlay canvas)
+    // ═══════════════════════════════════════════════════════════
+
+    function drawNameLabels(gameState) {
+        const overlay = window.PDROP.getOverlayCanvas();
+        if (!overlay) return;
+        const oc = overlay.getContext('2d');
+        if (!oc || !gameState) return;
+
+        const vec = new THREE.Vector3();
+
+        for (const p of gameState.players) {
+            if (!p.alive) continue;
+
+            vec.set(p.x, 25, p.y);
+            vec.project(camera3d);
+
+            const sx = (vec.x * 0.5 + 0.5) * 1920;
+            const sy = (-vec.y * 0.5 + 0.5) * 1080;
+
+            if (sx < -100 || sx > 2020 || sy < -100 || sy > 1180) continue;
+
+            oc.font = '600 20px Rajdhani';
+            oc.textAlign = 'center';
+            oc.textBaseline = 'bottom';
+            oc.fillStyle = 'rgba(0,0,0,0.6)';
+            oc.fillText(p.name, sx + 1, sy + 1);
+            oc.fillStyle = '#ffffff';
+            oc.fillText(p.name, sx, sy);
+
+            if (p.reachedGoal) {
+                oc.fillStyle = '#f0c040';
+                oc.font = '700 16px Rajdhani';
+                oc.fillText('\u2605 SAFE', sx, sy - 18);
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // HUD
     // ═══════════════════════════════════════════════════════════
 
     function updateStatusBar(gameState) {
@@ -443,29 +625,26 @@
 
         const lobby = window.PDROP.getCurrentLobby();
         const isTeams = lobby && lobby.mode === 'teams';
-
         const running = gameState.players.filter(p => p.alive && !p.reachedGoal).length;
         const caught = gameState.players.filter(p => !p.alive).length;
         const finished = gameState.players.filter(p => p.reachedGoal).length;
 
         if (isTeams) {
-            const teamData = {};
-            const TCOLORS = window.PDROP.COLORS;
-            const TNAMES = window.PDROP.COLOR_NAMES;
+            const td = {};
+            const TC = window.PDROP.COLORS, TN = window.PDROP.COLOR_NAMES;
             for (const p of gameState.players) {
-                if (!teamData[p.team]) teamData[p.team] = { running: 0, caught: 0, finished: 0 };
-                if (p.reachedGoal) teamData[p.team].finished++;
-                else if (!p.alive) teamData[p.team].caught++;
-                else teamData[p.team].running++;
+                if (!td[p.team]) td[p.team] = { r: 0, c: 0, f: 0 };
+                if (p.reachedGoal) td[p.team].f++;
+                else if (!p.alive) td[p.team].c++;
+                else td[p.team].r++;
             }
             let html = '';
-            for (const t of Object.keys(teamData).sort()) {
-                const td = teamData[t];
+            for (const t of Object.keys(td).sort()) {
+                const d = td[t];
                 if (html) html += '&nbsp;&nbsp;|&nbsp;&nbsp;';
-                html += `<span style="color:${TCOLORS[t]}">${TNAMES[t]}</span>: `;
-                html += `${td.running} running`;
-                if (td.caught > 0) html += ` · ${td.caught} caught`;
-                if (td.finished > 0) html += ` · ${td.finished} finished`;
+                html += `<span style="color:${TC[t]}">${TN[t]}</span>: ${d.r}`;
+                if (d.c > 0) html += ` \u00B7 ${d.c}\u2620`;
+                if (d.f > 0) html += ` \u00B7 ${d.f}\u2605`;
             }
             el.innerHTML = html;
         } else {
@@ -473,7 +652,7 @@
             if (running > 0) parts.push(`${running} running`);
             if (caught > 0) parts.push(`${caught} caught`);
             if (finished > 0) parts.push(`${finished} finished`);
-            el.textContent = parts.join(' · ');
+            el.textContent = parts.join(' \u00B7 ');
         }
     }
 
@@ -484,22 +663,24 @@
         if (!lp) { el.textContent = ''; return; }
 
         if (!lp.alive) {
-            el.textContent = '☠ You were caught! Waiting for revival...';
+            el.textContent = '\u2620 You were caught! Waiting for revival...';
             el.style.color = lp.color;
         } else if (lp.reachedGoal) {
-            el.textContent = '★ You made it! Cheering on teammates...';
+            el.textContent = '\u2605 You made it! Cheering on teammates...';
             el.style.color = '#f0c040';
         } else {
             el.textContent = '';
         }
     }
 
+    function esc(str) { return window.PDROP.escapeHtml(str); }
 
     // ═══════════════════════════════════════════════════════════
     // GAMEDEF
     // ═══════════════════════════════════════════════════════════
 
     window.GameDef = {
+        renderer: '3d',
         id: 'rkr',
         name: 'Run Kitty Run!',
         maxPlayers: 12,
@@ -523,29 +704,68 @@
             return null;
         },
 
+        initRenderer(canvasEl) {
+            if (rendererReady) return;
+
+            renderer3d = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true });
+            renderer3d.setSize(1920, 1080, false);
+            renderer3d.setClearColor(0x060610);
+            renderer3d.setPixelRatio(1);
+
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x060610, 0.00015);
+
+            camera3d = new THREE.PerspectiveCamera(CAM_FOV, 1920 / 1080, 10, 8000);
+
+            // Lighting
+            ambientLight = new THREE.AmbientLight(0xccccdd, 0.45);
+            scene.add(ambientLight);
+
+            dirLight = new THREE.DirectionalLight(0xfff5e0, 0.7);
+            dirLight.position.set(-1500, 2000, -1000);
+            scene.add(dirLight);
+
+            const fillLight = new THREE.DirectionalLight(0xaabbdd, 0.25);
+            fillLight.position.set(1000, 800, 2000);
+            scene.add(fillLight);
+
+            initSharedAssets();
+            buildMazeScene();
+
+            rendererReady = true;
+            SFX.init();
+        },
+
         onGameStart(initialState) {
-            // Generate maze client-side (deterministic, same as server)
             mazeZones = generateMazeClient();
-            // Clear event feed
             const ef = document.getElementById('event-feed');
             if (ef) ef.innerHTML = '';
             const ps = document.getElementById('personal-status');
             if (ps) ps.textContent = '';
+
+            // Clear existing entities
+            for (const id of Object.keys(kittenMeshes)) { scene.remove(kittenMeshes[id]); }
+            kittenMeshes = {};
+            for (const id of Object.keys(dogMeshes)) { scene.remove(dogMeshes[id]); }
+            dogMeshes = {};
+            for (const id of Object.keys(deathMarkers)) { scene.remove(deathMarkers[id]); }
+            deathMarkers = {};
         },
 
         onElimination(msg) {
-            // The framework sends 'elimination' events — show in event feed
             const ef = document.getElementById('event-feed');
             if (!ef) return;
 
             let text = '';
             if (msg.type === 'kitten_revived') {
                 text = `<span style="color:${msg.reviverColor}">${esc(msg.reviverName)}</span> revived <span style="color:${msg.playerColor}">${esc(msg.playerName)}</span>!`;
+                SFX.play('revived');
             } else if (msg.type === 'kitten_reached_goal') {
-                text = `<span style="color:${msg.playerColor}">${esc(msg.playerName)}</span> reached the goal! ★`;
+                text = `<span style="color:${msg.playerColor}">${esc(msg.playerName)}</span> reached the goal! \u2605`;
+                SFX.play('goal');
             } else {
-                // Default elimination (caught)
                 text = `<span style="color:${msg.playerColor}">${esc(msg.playerName)}</span> was caught!`;
+                SFX.play('caught');
             }
 
             const entry = document.createElement('div');
@@ -558,108 +778,44 @@
             }, 5000);
         },
 
-        render(ctx, camera, gameState) {
-            if (!gameState) return;
+        render(fwCamera, gameState) {
+            if (!rendererReady || !renderer3d) return;
             frameTick++;
 
-            const cx = camera.x;
-            const cy = camera.y;
-            const zoom = camera.zoom || 1;
+            if (gameState) {
+                reconcileKittens(gameState.players || []);
+                reconcileDogs(gameState.dogs);
+                reconcileDeathMarkers(gameState.players || []);
+                checkDogProximity(gameState);
+                updateStatusBar(gameState);
+                updatePersonalStatus(gameState);
+            }
+
+            // Goal light pulse
+            if (goalLight) {
+                goalPulse += 0.03;
+                goalLight.intensity = 0.4 + Math.sin(goalPulse) * 0.25;
+                goalLight.position.y = 60 + Math.sin(goalPulse * 0.7) * 15;
+            }
+
+            // Map framework camera → Three.js camera
+            const zoom = fwCamera.zoom || 1;
             const vw = 1920 / zoom;
             const vh = 1080 / zoom;
+            const centerX = fwCamera.x + vw / 2;
+            const centerZ = fwCamera.y + vh / 2;
+            const height = CAM_BASE_HEIGHT / zoom;
+            const zOffset = height * CAM_TILT_FACTOR;
 
-            // ── 1. Void background ──
-            ctx.fillStyle = COLORS.void;
-            ctx.fillRect(0, 0, vw, vh);
+            camera3d.position.set(centerX, height, centerZ + zOffset);
+            camera3d.lookAt(centerX, 0, centerZ);
 
-            // ── 2. Zone ground fills ──
-            drawZones(ctx, cx, cy, vw, vh);
+            renderer3d.render(scene, camera3d);
 
-            // ── 3. Grid ──
-            drawGrid(ctx, cx, cy, vw, vh);
-
-            // ── 4. Death markers ──
-            for (const p of gameState.players) {
-                if (p.alive || p.deathX === null) continue;
-                const sx = p.deathX - cx;
-                const sy = p.deathY - cy;
-                if (sx < -50 || sx > vw + 50 || sy < -50 || sy > vh + 50) continue;
-                drawDeathMarker(ctx, sx, sy, p.color);
+            // Name labels on overlay
+            if (gameState) {
+                drawNameLabels(gameState);
             }
-
-            // ── 5. Dog shadows ──
-            if (gameState.dogs) {
-                for (const d of gameState.dogs) {
-                    const sx = d.x - cx;
-                    const sy = d.y - cy;
-                    if (sx < -40 || sx > vw + 40 || sy < -40 || sy > vh + 40) continue;
-                    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-                    ctx.beginPath();
-                    ctx.ellipse(sx, sy + 6, DOG_RADIUS + 4, DOG_RADIUS * 0.4, 0, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-
-            // ── 6. Kitten shadows ──
-            for (const p of gameState.players) {
-                if (!p.alive) continue;
-                const sx = p.x - cx;
-                const sy = p.y - cy;
-                if (sx < -40 || sx > vw + 40 || sy < -40 || sy > vh + 40) continue;
-                ctx.fillStyle = 'rgba(0,0,0,0.2)';
-                ctx.beginPath();
-                ctx.ellipse(sx, sy + 5, KITTEN_RADIUS + 3, KITTEN_RADIUS * 0.4, 0, 0, Math.PI * 2);
-                ctx.fill();
-            }
-
-            // ── 7. Dogs ──
-            if (gameState.dogs) {
-                for (const d of gameState.dogs) {
-                    const sx = d.x - cx;
-                    const sy = d.y - cy;
-                    if (sx < -40 || sx > vw + 40 || sy < -40 || sy > vh + 40) continue;
-                    drawDog(ctx, sx, sy, d.angle, DOG_RADIUS, d.s === 0);
-                }
-            }
-
-            // ── 8. Kittens ──
-            for (const p of gameState.players) {
-                if (!p.alive) continue;
-                const sx = p.x - cx;
-                const sy = p.y - cy;
-                if (sx < -40 || sx > vw + 40 || sy < -40 || sy > vh + 40) continue;
-                drawKitten(ctx, sx, sy, p.angle, p.color, p.radius || KITTEN_RADIUS, p.invulnTicks || 0);
-            }
-
-            // ── 9. Name labels ──
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-            for (const p of gameState.players) {
-                if (!p.alive) continue;
-                const sx = p.x - cx;
-                const sy = p.y - cy;
-                if (sx < -60 || sx > vw + 60 || sy < -60 || sy > vh + 60) continue;
-
-                const r = p.radius || KITTEN_RADIUS;
-                ctx.font = '600 20px Rajdhani';
-                // Shadow
-                ctx.fillStyle = 'rgba(0,0,0,0.5)';
-                ctx.fillText(p.name, sx + 1, sy - r - 11);
-                // Text
-                ctx.fillStyle = '#fff';
-                ctx.fillText(p.name, sx, sy - r - 12);
-
-                // Goal star
-                if (p.reachedGoal) {
-                    ctx.fillStyle = '#f0c040';
-                    ctx.font = '700 16px Rajdhani';
-                    ctx.fillText('★ SAFE', sx, sy - r - 28);
-                }
-            }
-
-            // ── 10. HUD updates ──
-            updateStatusBar(gameState);
-            updatePersonalStatus(gameState);
         },
 
         onInput(inputType, data) {
@@ -672,9 +828,7 @@
         },
 
         getScoreboardColumns() {
-            return [
-                { key: 'status', label: 'Status', width: 100 },
-            ];
+            return [{ key: 'status', label: 'Status', width: 100 }];
         },
 
         getPlayerStats(playerId) {
@@ -682,24 +836,22 @@
             if (!gs || !gs.players) return { status: '' };
             const p = gs.players.find(pl => pl.id === playerId);
             if (!p) return { status: '' };
-            if (p.reachedGoal) return { status: '★ Finished' };
-            if (!p.alive) return { status: '☠ Caught' };
+            if (p.reachedGoal) return { status: '\u2605 Finished' };
+            if (!p.alive) return { status: '\u2620 Caught' };
             return { status: 'Running' };
         },
 
         getEntityTooltip(entity) {
             if (entity.type === 'player') {
                 const status = entity.reachedGoal ? 'Reached the goal!' :
-                               entity.alive ? 'Running' : 'Caught!';
+                    entity.alive ? 'Running' : 'Caught!';
                 return `<div class="tip-title" style="color: ${entity.color}">${esc(entity.name)}</div>`
-                     + `<div class="tip-desc">${status}</div>`;
+                    + `<div class="tip-desc">${status}</div>`;
             }
             return null;
         },
 
-        getResults(finalState) {
-            return finalState;
-        },
+        getResults(finalState) { return finalState; },
     };
 
 })();
