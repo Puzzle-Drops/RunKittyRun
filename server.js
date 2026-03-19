@@ -4,7 +4,7 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 
 const framework = require('./server/framework');
-const game = require('./game/arrow');
+const game = require('./game/rkr');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,5 +17,5 @@ framework.init(wss, game);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`PDROP Arrow running on port ${PORT}`);
+    console.log(`Run Kitty Run! running on port ${PORT}`);
 });
