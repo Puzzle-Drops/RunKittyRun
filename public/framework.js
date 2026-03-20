@@ -1691,8 +1691,10 @@
 
         if (!loadingEl) return;
 
+        console.log('[FW] Loading screen check — GameDef:', !!window.GameDef, 'preload:', !!(window.GameDef && window.GameDef.preload));
         if (!window.GameDef || !window.GameDef.preload) {
             // No preload needed — hide loading screen immediately
+            console.log('[FW] No preload found, hiding loading screen');
             loadingEl.classList.add('hidden');
             return;
         }
