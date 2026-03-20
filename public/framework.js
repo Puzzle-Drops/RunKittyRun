@@ -1683,18 +1683,17 @@
     // ── Loading Screen ─────────────────────────────────────────────
     // If GameDef defines preload(), show a loading screen while assets load.
     // Games without preload() skip this entirely.
-    // Deferred to next frame so game.js has time to define window.GameDef.
-    setTimeout(function initLoadingScreen() {
+    // Wait for all scripts to finish executing before checking for preload.
+    // DOMContentLoaded fires after all synchronous scripts have run.
+    window.addEventListener('DOMContentLoaded', function initLoadingScreen() {
         const loadingEl = document.getElementById('loading-screen');
         const loadingBar = document.getElementById('loading-bar');
         const loadingStatus = document.getElementById('loading-status');
 
         if (!loadingEl) return;
 
-        console.log('[FW] Loading screen check — GameDef:', !!window.GameDef, 'preload:', !!(window.GameDef && window.GameDef.preload));
         if (!window.GameDef || !window.GameDef.preload) {
             // No preload needed — hide loading screen immediately
-            console.log('[FW] No preload found, hiding loading screen');
             loadingEl.classList.add('hidden');
             return;
         }
@@ -1727,7 +1726,7 @@
                 setTimeout(() => loadingEl.classList.add('hidden'), 500);
             }, 1500);
         });
-    }, 0);
+    });
 
     // ── Expose for game.js ────────────────────────────────────────
     window.PDROP = {

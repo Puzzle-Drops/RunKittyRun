@@ -1,5 +1,4 @@
 // Run Kitty Run! — Client-side 3D game code (Three.js)
-console.log('[RKR] game.js loading...');
 
 (function () {
     'use strict';
@@ -1074,7 +1073,6 @@ console.log('[RKR] game.js loading...');
     // GAMEDEF
     // ═══════════════════════════════════════════════════════════
 
-    console.log('[RKR] Defining GameDef...');
     window.GameDef = {
         renderer: '3d',
         id: 'rkr',
@@ -1261,5 +1259,4 @@ console.log('[RKR] game.js loading...');
         },
         getResults(finalState) { return finalState; },
     };
-    console.log('[RKR] GameDef defined, preload:', typeof window.GameDef.preload);
 })();
