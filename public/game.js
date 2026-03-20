@@ -470,11 +470,11 @@
 
     function loadGroundTextures() {
         // Each texture loads independently — failures fall back to procedural
-        return Promise.allSettled([
-            loadTextureAsync('Textures/Summer_Flowers.png').then(t => { preloadedTextures.safe = t; }),
-            loadTextureAsync('Textures/Summer_Grass_A.png').then(t => { preloadedTextures.danger = t; }),
-            loadTextureAsync('Textures/Winter_FrozenGround.png').then(t => { preloadedTextures.void = t; }),
-            loadTextureAsync('Textures/Summer_Roses.png').then(t => { preloadedTextures.goal = t; }),
+        return Promise.all([
+            loadTextureAsync('Textures/Summer_Flowers.png').then(t => { preloadedTextures.safe = t; }).catch(e => console.warn('Texture load failed:', e)),
+            loadTextureAsync('Textures/Summer_Grass_A.png').then(t => { preloadedTextures.danger = t; }).catch(e => console.warn('Texture load failed:', e)),
+            loadTextureAsync('Textures/Winter_FrozenGround.png').then(t => { preloadedTextures.void = t; }).catch(e => console.warn('Texture load failed:', e)),
+            loadTextureAsync('Textures/Summer_Roses.png').then(t => { preloadedTextures.goal = t; }).catch(e => console.warn('Texture load failed:', e)),
         ]);
     }
 
@@ -546,7 +546,7 @@
             }, undefined, (err) => { console.error('Failed to load Wolf GLB:', err); reject(err); });
         }));
 
-        return Promise.allSettled(promises);
+        return Promise.all(promises);
     }
 
     function cloneModel(template) {
@@ -1111,12 +1111,10 @@
         },
 
         preload() {
-            // Use allSettled so one failure doesn't kill everything
-            return Promise.allSettled([loadGLBModels(), loadGroundTextures()]).then(results => {
-                for (const r of results) {
-                    if (r.status === 'rejected') console.warn('Preload partial failure:', r.reason);
-                }
-            });
+            return Promise.all([
+                loadGLBModels().catch(e => console.warn('Model load failed:', e)),
+                loadGroundTextures().catch(e => console.warn('Texture load failed:', e)),
+            ]);
         },
 
         getCameraLockTarget(lp) {
