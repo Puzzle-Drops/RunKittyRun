@@ -9,6 +9,8 @@ const game = require('./game/rkr');
 const app = express();
 const server = http.createServer(app);
 
+express.static.mime.define({ 'model/gltf-binary': ['glb'] });
+express.static.mime.define({ 'model/gltf+json': ['gltf'] });
 app.use(express.static(path.join(__dirname, 'public')));
 
 const wss = new WebSocketServer({ server });
