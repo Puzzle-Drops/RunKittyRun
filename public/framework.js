@@ -620,6 +620,38 @@
             html += '</div>';
         }
 
+        // Game settings (from GameDef.getSettings())
+        if (window.GameDef && window.GameDef.getSettings) {
+            const settingsDefs = window.GameDef.getSettings();
+            if (settingsDefs && settingsDefs.length > 0) {
+                html += '<div class="lobby-settings">';
+                for (const s of settingsDefs) {
+                    const currentVal = (currentLobby.settings && currentLobby.settings[s.key] !== undefined)
+                        ? currentLobby.settings[s.key] : s.default;
+                    html += '<div class="lobby-setting">';
+                    html += `<span class="lobby-setting-label">${escapeHtml(s.label)}:</span>`;
+                    if (s.type === 'select') {
+                        html += '<div class="lobby-setting-options">';
+                        for (const opt of s.options) {
+                            const val = typeof opt === 'object' ? opt.value : opt;
+                            const label = typeof opt === 'object' ? opt.label : opt;
+                            const active = String(currentVal) === String(val) ? ' active' : '';
+                            if (isHost) {
+                                html += `<button class="lobby-setting-btn${active}" data-setting-key="${s.key}" data-setting-val="${val}">${escapeHtml(String(label))}</button>`;
+                            } else {
+                                html += `<span class="lobby-setting-btn${active}">${escapeHtml(String(label))}</span>`;
+                            }
+                        }
+                        html += '</div>';
+                    } else {
+                        html += `<span class="lobby-setting-value">${escapeHtml(String(currentVal))}</span>`;
+                    }
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+        }
+
         // Slot panels
         if (currentLobby.mode === 'teams') {
             html += '<div class="lobby-teams">';
@@ -699,6 +731,13 @@
                 });
             });
         }
+
+        // Settings buttons (host only)
+        lobbyContent.querySelectorAll('.lobby-setting-btn[data-setting-key]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                wsSend({ type: 'lobby_settings', key: btn.dataset.settingKey, value: btn.dataset.settingVal });
+            });
+        });
 
         const btnReady = document.getElementById('btn-ready');
         if (btnReady) btnReady.addEventListener('click', () => wsSend({ type: 'lobby_ready' }));

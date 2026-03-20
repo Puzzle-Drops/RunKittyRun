@@ -1352,14 +1352,21 @@ Messages are JSON strings sent over WebSocket. The framework provides message sc
 ## 12. Game Lifecycle
 
 ```
+PAGE LOAD
+  ├── Framework initializes (scaling, WebSocket, UI)
+  ├── Loading screen shown (if GameDef.preload() exists)
+  ├── Assets load in background (models, textures, etc.)
+  ├── Loading screen fades out → main menu appears
+  ▼
 LOBBY
-  ├── Players join slots, pick teams, configure settings
+  ├── Players join slots, pick teams
+  ├── Host configures game settings (if GameDef.getSettings() defined)
   ├── Host starts game
   ▼
-LOADING
-  ├── Game assets load
-  ├── World initializes
-  ├── Camera snaps to starting position (game-defined)
+COUNTDOWN (3s)
+  ├── 3D renderer initialized (if renderer === '3d')
+  ├── World scene built
+  ├── Camera snaps to starting position
   ▼
 IN GAME
   ├── Game loop runs (update → render)
@@ -1375,7 +1382,248 @@ POST GAME
   ├── Options: Rematch (return to lobby) / Leave (main menu)
 ```
 
-### 12.1 Game Loop
+### 12.1 Loading Screen & Asset Preloading
+
+The framework provides a built-in loading screen for games that need to load assets (3D models, textures, etc.) before the player reaches the main menu.
+
+**How it works:**
+1. After all scripts load, the framework checks for `GameDef.preload()`
+2. If defined, it shows a loading screen with an animated progress bar
+3. Calls `preload()` which must return a `Promise`
+4. When the promise resolves, the loading screen fades out
+5. If `preload()` is not defined, the loading screen is skipped entirely
+
+```js
+// In GameDef — return a Promise that resolves when all assets are ready
+preload() {
+    return Promise.all([
+        loadModels(),    // load GLB/GLTF models
+        loadTextures(),  // load texture images
+    ]);
+},
+```
+
+The loading screen HTML (`#loading-screen`) is part of `index.html` inside `#game-container`. It uses z-index 200 to overlay everything.
+
+### 12.2 Renderer Modes
+
+The framework supports two renderer modes:
+
+| Mode | Set via | Canvas ownership | render() signature |
+|------|---------|-----------------|-------------------|
+| `'2d'` (default) | `GameDef.renderer = '2d'` | Framework creates 2D context, applies camera transforms | `render(ctx, camera, gameState)` |
+| `'3d'` | `GameDef.renderer = '3d'` | Game owns the canvas (Three.js WebGL) | `render(camera, gameState)` |
+
+**3D mode:** The game must define `initRenderer(canvasEl)` which is called once during countdown. The game creates its own Three.js renderer, scene, and camera on the provided canvas element. The framework still handles the overlay canvas for pings, countdown, and UI.
+
+```js
+// 3D game example
+window.GameDef = {
+    renderer: '3d',
+    // ...
+    initRenderer(canvasEl) {
+        renderer3d = new THREE.WebGLRenderer({ canvas: canvasEl, antialias: true });
+        renderer3d.setSize(1920, 1080, false);
+        scene = new THREE.Scene();
+        camera3d = new THREE.PerspectiveCamera(50, 1920/1080, 10, 8000);
+        // ... lights, scene setup
+    },
+    render(fwCamera, gameState) {
+        // Map framework camera to 3D camera position
+        // Reconcile entities, update animations
+        // renderer3d.render(scene, camera3d);
+    },
+};
+```
+
+### 12.3 3D Models & Textures
+
+For 3D games using Three.js, models and textures should be preloaded during the loading screen so they're ready before any game starts.
+
+**Loading GLB/GLTF Models:**
+
+```js
+// Load a model and extract animations
+function loadModel(path, texturePath, normalPath) {
+    return new Promise((resolve, reject) => {
+        const loader = new THREE.GLTFLoader();
+        loader.load(path, (gltf) => {
+            const model = gltf.scene;
+
+            // Apply textures
+            const diffuse = new THREE.TextureLoader().load(texturePath);
+            diffuse.flipY = false;
+            const normal = new THREE.TextureLoader().load(normalPath);
+            normal.flipY = false;
+
+            model.traverse((child) => {
+                if (child.isSkinnedMesh || child.isMesh) {
+                    child.material = new THREE.MeshStandardMaterial({
+                        map: diffuse,
+                        normalMap: normal,
+                        roughness: 0.7,
+                        metalness: 0.05,
+                        skinning: child.isSkinnedMesh,
+                    });
+                }
+            });
+
+            // Compute scale factor from bounding box
+            model.updateMatrixWorld(true);
+            const box = new THREE.Box3().setFromObject(model);
+            const size = new THREE.Vector3();
+            box.getSize(size);
+            const scaleFactor = TARGET_HEIGHT / size.y;
+
+            resolve({ model, animations: gltf.animations, scaleFactor });
+        }, undefined, reject);
+    });
+}
+```
+
+**Loading Textures for Ground/Terrain:**
+
+```js
+function loadTextureAsync(path) {
+    return new Promise((resolve, reject) => {
+        new THREE.TextureLoader().load(path, (tex) => {
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            resolve(tex);
+        }, undefined, reject);
+    });
+}
+```
+
+**Cloning Models with Animations:**
+
+Use `THREE.SkeletonUtils.clone()` for skinned meshes (skeletal animation). Regular `clone()` won't preserve bone bindings.
+
+```js
+const instance = THREE.SkeletonUtils.clone(template);
+const mixer = new THREE.AnimationMixer(instance);
+const idleAction = mixer.clipAction(findAnimation(animations, 'Idle01'));
+const runAction = mixer.clipAction(findAnimation(animations, 'Run_Forward'));
+idleAction.play();
+```
+
+**Animation State Management:**
+
+Track current animation per entity and crossfade between states:
+
+```js
+if (shouldRun && currentAnim !== 'run') {
+    idleAction.fadeOut(0.2);
+    runAction.reset().fadeIn(0.2).play();
+    currentAnim = 'run';
+} else if (!shouldRun && currentAnim !== 'idle') {
+    runAction.fadeOut(0.2);
+    idleAction.reset().fadeIn(0.2).play();
+    currentAnim = 'idle';
+}
+```
+
+For one-shot animations (death, emotes), use `setLoop(THREE.LoopOnce)` and `clampWhenFinished = true`.
+
+**File Organization:**
+
+```
+public/
+├── models/
+│   ├── cat/
+│   │   ├── Cat.glb              ← Skinned mesh with animations
+│   │   ├── T_Cat_Gr_D.png       ← Diffuse texture
+│   │   └── T_Cat_N.png          ← Normal map
+│   └── wolf/
+│       ├── Wolf.glb
+│       ├── T_Wolf_Gr_D.png
+│       └── T_Wolf_N.png
+└── Textures/
+    ├── Summer_Grass_A.png        ← Ground textures
+    ├── Summer_Flowers.png
+    └── ...
+```
+
+### Converting FBX Models to GLB
+
+The framework uses GLB (binary glTF) format for 3D models because browsers can load them directly via Three.js's GLTFLoader. Source models often come as FBX files (common in Unity/Unreal asset packs). Here's how to convert:
+
+**Using Blender (recommended):**
+
+1. Open Blender → File → Import → FBX (.fbx)
+2. Select the FBX file (e.g., `Cat.fbx`)
+3. In the import settings, check "Automatic Bone Orientation" if animations look wrong
+4. File → Export → glTF 2.0 (.glb/.gltf)
+5. Set format to "glTF Binary (.glb)" for a single file
+6. Under "Include", check: Animations, Skinning
+7. Export to `public/models/creature-name/CreatureName.glb`
+
+**Using an online converter:**
+
+Sites like [glTF Viewer](https://gltf-viewer.donmccurdy.com/) or `fbx2gltf` CLI can also convert. Make sure animations are included.
+
+**Texture maps to export alongside the GLB:**
+
+| Map | Suffix | Purpose |
+|-----|--------|---------|
+| Diffuse | `_D.png` | Base color |
+| Normal | `_N.png` | Surface detail / lighting |
+| AO | `_AO.png` | Ambient occlusion (optional) |
+| Emissive | `_E.png` | Glow/emission (optional) |
+| Metallic/Roughness | `_MR.png` | PBR properties (optional) |
+
+Copy the texture PNGs into the same folder as the GLB. At minimum you need the diffuse (`_D.png`) and normal (`_N.png`) maps.
+
+**Required CDN Scripts (add before framework.js):**
+
+```html
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/SkeletonUtils.js"></script>
+```
+
+### 12.4 Lobby Settings
+
+Games can define configurable settings that the host can change in the lobby before starting. The framework handles all UI rendering and networking automatically.
+
+**Server module** — declare defaults:
+
+```js
+module.exports = {
+    id: 'my-game',
+    name: 'My Game',
+    maxPlayers: 8,
+    defaultSettings: { difficulty: 'easy', mapSize: 'medium' },
+
+    init(playerList, settings, mode, teamCount) {
+        // settings.difficulty, settings.mapSize, etc.
+    },
+};
+```
+
+**Client GameDef** — declare the UI schema:
+
+```js
+getSettings() {
+    return [
+        {
+            key: 'difficulty',       // matches server settings key
+            label: 'Difficulty',     // displayed in lobby
+            type: 'select',          // 'select' = button group
+            default: 'easy',
+            options: [
+                { value: 'easy', label: 'Easy' },
+                { value: 'medium', label: 'Medium' },
+                { value: 'hard', label: 'Hard' },
+            ],
+        },
+    ];
+},
+```
+
+The framework renders settings between the mode controls and player slots. Only the host can change them. All players see the current values. Settings are stored in `lobby.settings` and passed to `game.init()` on game start.
+
+### 12.5 Game Loop
 
 The render loop runs at the browser's refresh rate (typically 60fps). To smooth out the 20 tick/sec server updates, the framework interpolates entity positions between the previous and current server states.
 
@@ -1392,9 +1640,9 @@ function gameLoop(timestamp) {
 }
 ```
 
-The interpolation lerps `x`/`y` for players and arrows. All other properties (alive, angle, color, etc.) use the latest server state. Input logic always uses the raw authoritative state, not the interpolated one.
+The interpolation lerps `x`, `y`, and `angle` (using shortest-arc) for players and dogs/entities. All other properties (alive, color, etc.) use the latest server state. Input logic always uses the raw authoritative state, not the interpolated one.
 
-### 12.2 Game-Defined Hooks
+### 12.6 Game-Defined Hooks
 
 Each game defines a `GameDef` object. Only `id`, `name`, and `maxPlayers` are required. Everything else has sensible defaults — if you don't define a hook, the framework skips it or uses the default behavior.
 
@@ -1406,26 +1654,29 @@ const GameDef = {
     maxPlayers: 8,
 
     // ── Optional properties (defaults shown) ──────────────────
+    renderer: '2d',                     // '2d' or '3d'
     supportedModes: ['ffa'],            // 'teams', 'ffa', or both
     defaultMode: 'ffa',
     defaultTeamCount: 2,                // only used if mode is 'teams'
     worldWidth: 1920,                   // default = viewport size (no camera needed)
     worldHeight: 1080,
 
-    settings: {},                       // lobby-configurable settings (empty = none)
-
     // ── Optional hooks (all default to no-op / null) ──────────
     //    Framework checks if these exist before calling them.
     //    Only implement what your game needs.
 
+    preload() {},                           // Return Promise. Load assets before main menu.
+    getSettings() {},                       // Return setting definitions for lobby UI.
+    initRenderer(canvasEl) {},              // 3D only: set up WebGL renderer.
     getCameraLockTarget(localPlayer) {},    // Y-lock target. Omit = Y does nothing.
     getCameraSnapTarget(localPlayer) {},    // Space-jump target. Omit = Space does nothing.
     getScoreboardColumns() {},              // Extra stat columns. Omit = just player names.
     getPlayerStats(playerId) {},            // Stats per player. Omit = no stats.
     getEntityTooltip(entity) {},            // Canvas entity tooltips. Omit = no entity tooltips.
-    init(players, settings) {},             // Set up world state on game start.
-    render(ctx, camera) {},                 // Draw the game world.
+    onGameStart(initialState) {},           // Called on countdown and game start.
+    render(ctx_or_camera, gameState) {},    // Draw the game world (signature varies by renderer).
     onInput(inputType, data) {},            // Handle game-specific input.
+    onElimination(msg) {},                  // Handle elimination/revival events.
     getResults() {},                        // Post-game results. Omit = generic "Game Over".
 };
 ```
@@ -1439,6 +1690,13 @@ if (GameDef.getCameraLockTarget) {
     // ...
 }
 ```
+
+**Input types passed to onInput:**
+- `'rightclick'` — single right-click, `data: { x, y }` (world coords)
+- `'rightmousedown'` — right button pressed, `data: { x, y }`
+- `'rightmouseup'` — right button released, `data: {}`
+- `'click'` — left click, `data: { x, y }` (world coords)
+- `'keydown'` / `'keyup'` — keyboard, `data: { key, code }`
 
 **Slot calculation:** The framework computes slots from `maxPlayers` and the lobby's current `teamCount`. In team mode, slots per team = `Math.floor(maxPlayers / teamCount)`. In FFA, all slots are in one pool. No need to specify `slotsPerTeam`.
 

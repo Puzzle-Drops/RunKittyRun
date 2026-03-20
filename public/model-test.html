@@ -2,108 +2,108 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Model Test — Cat &amp; Wolf GLB</title>
+    <title>Model Viewer — All Creatures</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #1a1a2e; color: #eee; font-family: monospace; overflow: hidden; }
+        body { background: #1a1a2e; color: #eee; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
         canvas { display: block; width: 100vw; height: 100vh; }
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             font-size: 24px; color: #fff; z-index: 20;
         }
-        #controls {
-            position: absolute; top: 16px; right: 16px;
-            background: rgba(0,0,0,0.85); padding: 16px; border-radius: 8px;
-            font-size: 13px; line-height: 2; z-index: 10; width: 320px;
-            max-height: 90vh; overflow-y: auto;
+        #sidebar {
+            position: absolute; top: 0; left: 0; bottom: 0; width: 220px;
+            background: rgba(10,12,18,0.92); border-right: 1px solid rgba(255,255,255,0.1);
+            overflow-y: auto; z-index: 10; padding: 12px 0;
         }
-        #controls h3 { color: #f0c040; margin: 8px 0 4px; font-size: 14px; }
-        #controls h3:first-child { margin-top: 0; }
-        #controls label { display: flex; align-items: center; gap: 8px; }
-        #controls input[type=range] { flex: 1; }
-        #controls .val { color: #888; min-width: 50px; text-align: right; font-size: 12px; }
-        #controls .row { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
-        #controls input[type=checkbox] { margin: 0; }
-        #controls button {
-            background: #444; color: #eee; border: 1px solid #666; padding: 4px 12px;
-            border-radius: 4px; cursor: pointer; margin-top: 8px;
+        #sidebar h2 { font-size: 16px; color: #f0c040; padding: 8px 16px; margin: 0; }
+        .creature-btn {
+            display: block; width: 100%; text-align: left; padding: 8px 16px;
+            background: none; border: none; color: rgba(255,255,255,0.7);
+            font-size: 14px; font-family: inherit; cursor: pointer;
         }
-        #controls button:hover { background: #555; }
+        .creature-btn:hover { background: rgba(255,255,255,0.06); color: #fff; }
+        .creature-btn.active { background: rgba(93,173,226,0.2); color: #5dade2; font-weight: 700; }
+        .creature-btn .status { font-size: 11px; color: rgba(255,255,255,0.3); margin-left: 4px; }
+        .creature-btn.loaded .status { color: rgba(111,207,112,0.6); }
+        .creature-btn.failed .status { color: rgba(231,76,60,0.6); }
         #info {
-            position: absolute; top: 16px; left: 16px;
-            background: rgba(0,0,0,0.7); padding: 12px 16px; border-radius: 8px;
-            font-size: 13px; line-height: 1.6; z-index: 10;
+            position: absolute; bottom: 16px; left: 240px;
+            background: rgba(10,12,18,0.85); padding: 12px 16px; border-radius: 8px;
+            font-size: 13px; line-height: 1.8; z-index: 10;
         }
         #info .label { color: #888; }
+        #anim-list {
+            position: absolute; top: 16px; right: 16px;
+            background: rgba(10,12,18,0.85); padding: 12px 16px; border-radius: 8px;
+            font-size: 13px; z-index: 10; max-height: 80vh; overflow-y: auto; min-width: 200px;
+        }
+        #anim-list h3 { color: #f0c040; margin: 0 0 8px; font-size: 14px; }
+        .anim-btn {
+            display: block; width: 100%; text-align: left; padding: 4px 8px;
+            background: none; border: none; color: rgba(255,255,255,0.7);
+            font-size: 13px; font-family: inherit; cursor: pointer; border-radius: 3px;
+        }
+        .anim-btn:hover { background: rgba(255,255,255,0.08); }
+        .anim-btn.active { color: #5dade2; font-weight: 700; }
     </style>
 </head>
 <body>
-    <div id="loading">Loading models...</div>
-    <div id="info">
-        <div><span class="label">Cat:</span> <span id="cat-status">loading...</span></div>
-        <div><span class="label">Wolf:</span> <span id="wolf-status">loading...</span></div>
-        <div style="margin-top:4px"><span class="label">Controls:</span> drag=orbit, scroll=zoom</div>
+    <div id="loading">Loading...</div>
+    <div id="sidebar">
+        <h2>Creatures</h2>
+        <div id="creature-list"></div>
     </div>
-    <div id="controls">
-        <h3>UV Adjustments (both models)</h3>
-
-        <div class="row">
-            <label>Offset U <input type="range" id="uOffset" min="-1" max="1" step="0.01" value="0"><span class="val" id="uOffsetVal">0</span></label>
-        </div>
-        <div class="row">
-            <label>Offset V <input type="range" id="vOffset" min="-1" max="1" step="0.01" value="0"><span class="val" id="vOffsetVal">0</span></label>
-        </div>
-        <div class="row">
-            <label>Scale U <input type="range" id="uScale" min="-3" max="3" step="0.01" value="1"><span class="val" id="uScaleVal">1</span></label>
-        </div>
-        <div class="row">
-            <label>Scale V <input type="range" id="vScale" min="-3" max="3" step="0.01" value="1"><span class="val" id="vScaleVal">1</span></label>
-        </div>
-        <div class="row">
-            <label>Rotation <input type="range" id="uvRotation" min="0" max="6.28" step="0.01" value="0"><span class="val" id="uvRotationVal">0</span></label>
-        </div>
-
-        <h3>Flip</h3>
-        <div class="row">
-            <label><input type="checkbox" id="flipU"> Flip U (horizontal)</label>
-        </div>
-        <div class="row">
-            <label><input type="checkbox" id="flipV"> Flip V (vertical)</label>
-        </div>
-        <div class="row">
-            <label><input type="checkbox" id="flipTexY"> texture.flipY</label>
-        </div>
-
-        <h3>Geometry UV Flip</h3>
-        <div class="row">
-            <label><input type="checkbox" id="geoFlipV"> Flip V in geometry UVs</label>
-        </div>
-
-        <h3>Quick Presets</h3>
-        <button id="preset-default">Default</button>
-        <button id="preset-flipV">Flip V</button>
-        <button id="preset-flipGeoV">Geo Flip V</button>
-        <button id="preset-negScaleV">Scale V = -1</button>
-
-        <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #333;">
-            <div id="current-values" style="color: #0f0; font-size: 12px;"></div>
-        </div>
+    <div id="info">
+        <div><span class="label">Controls:</span> drag=orbit, scroll=zoom</div>
+        <div><span class="label">Model:</span> <span id="model-name">—</span></div>
+        <div><span class="label">Animations:</span> <span id="anim-count">—</span></div>
+    </div>
+    <div id="anim-list" style="display:none">
+        <h3>Animations</h3>
+        <div id="anim-buttons"></div>
     </div>
     <canvas id="canvas"></canvas>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/SkeletonUtils.js"></script>
     <script>
     (function() {
         'use strict';
 
+        // All creatures with their file paths
+        const CREATURES = [
+            { name: 'Bat', dir: 'bat', glb: 'Bat.glb', diffuse: 'T_ForestBat_Bl_D.png', normal: 'T_ForestBat_N.png' },
+            { name: 'Bear', dir: 'bear', glb: 'Bear.glb', diffuse: 'T_Bear_Bk_D.png', normal: 'T_Bear_N.png' },
+            { name: 'Boar', dir: 'boar', glb: 'Boar.glb', diffuse: 'T_Boar_Bl_D.png', normal: 'T_Boar_N.png' },
+            { name: 'Cat', dir: 'cat', glb: 'Cat.glb', diffuse: 'T_Cat_Gr_D.png', normal: 'T_Cat_N.png' },
+            { name: 'Chicken', dir: 'chicken', glb: 'Chicken.glb', diffuse: 'T_Chicken_Bk_D.png', normal: 'T_Chicken_N.png' },
+            { name: 'Cow', dir: 'cow', glb: 'Cow.glb', diffuse: 'T_Cow_Bk_D.png', normal: 'T_Cow_N.png' },
+            { name: 'Crocodile', dir: 'crocodile', glb: 'Crocodile.glb', diffuse: 'T_Crocodile_Bl_D.png', normal: 'T_Crocodile_N.png' },
+            { name: 'Eagle', dir: 'eagle', glb: 'Eagle.glb', diffuse: 'T_Eagle_Br_D.png', normal: 'T_Eagle_N.png' },
+            { name: 'Goat', dir: 'goat', glb: 'Goat.glb', diffuse: 'T_Goat_Bk_D.png', normal: 'T_Goat_N.png' },
+            { name: 'Hermit Crab', dir: 'hermitcrab', glb: 'CrabHermit.glb', diffuse: 'T_CrabHermit_Body_Bl_D.png', normal: 'T_CrabHermit_Body_N.png' },
+            { name: 'Pig', dir: 'pig', glb: 'Pig.glb', diffuse: 'T_Pig_Bl_D.png', normal: 'T_Pig_N.png' },
+            { name: 'Sheep', dir: 'sheep', glb: 'Sheep.glb', diffuse: 'T_Sheep_Bk_D.png', normal: 'T_Sheep_N.png' },
+            { name: 'Small Dinosaur', dir: 'smalldinosaur', glb: 'SmallDinosaur.glb', diffuse: 'T_SmallDinosaur_Bl_D.png', normal: 'T_SmallDinosaur_N.png' },
+            { name: 'Snail', dir: 'snail', glb: 'Snail.glb', diffuse: 'T_Snail_Bl_D.png', normal: 'T_Snail_N.png' },
+            { name: 'Snake', dir: 'snake', glb: 'Snake.glb', diffuse: 'T_Snake_Bl_D.png', normal: 'T_Snake_N.png' },
+            { name: 'Spider', dir: 'spider', glb: 'Spider.glb', diffuse: 'T_ForestSpider_Bl_D.png', normal: 'T_ForestSpider_N.png' },
+            { name: 'Tiger', dir: 'tiger', glb: 'Tiger.glb', diffuse: 'T_Tiger_Bk_D.png', normal: 'T_Tiger_N.png' },
+            { name: 'Toad', dir: 'toad', glb: 'Toad.glb', diffuse: 'T_Toad_Bl_D.png', normal: 'T_Toad_N.png' },
+            { name: 'Turtle', dir: 'turtle', glb: 'Turtle.glb', diffuse: 'T_Turtle_Body_Bl_D.png', normal: 'T_Turtle_Body_N.png' },
+            { name: 'Wasp', dir: 'wasp', glb: 'Wasp.glb', diffuse: 'T_ForestWasp_Bl_D.png', normal: 'T_ForestWasp_N.png' },
+            { name: 'Wolf', dir: 'wolf', glb: 'Wolf.glb', diffuse: 'T_Wolf_Gr_D.png', normal: 'T_Wolf_N.png' },
+        ];
+
+        // Renderer
         const canvas = document.getElementById('canvas');
         const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.setClearColor(0x1a1a2e);
-        renderer.outputEncoding = THREE.sRGBEncoding;
 
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -114,201 +114,183 @@
         controls.enableDamping = true;
         controls.update();
 
-        // Lighting
-        scene.add(new THREE.AmbientLight(0xccccdd, 0.5));
-        const dir = new THREE.DirectionalLight(0xfff5e0, 0.8);
-        dir.position.set(-3, 5, 2);
-        scene.add(dir);
-        const fill = new THREE.DirectionalLight(0xaabbdd, 0.3);
-        fill.position.set(2, 3, -2);
-        scene.add(fill);
+        // Lighting (same as game)
+        scene.add(new THREE.AmbientLight(0xccccdd, 0.45));
+        const dirLight = new THREE.DirectionalLight(0xfff5e0, 0.7);
+        dirLight.position.set(-3, 5, 2);
+        scene.add(dirLight);
+        const fillLight = new THREE.DirectionalLight(0xaabbdd, 0.25);
+        fillLight.position.set(2, 3, -2);
+        scene.add(fillLight);
 
         scene.add(new THREE.GridHelper(20, 20, 0x444466, 0x333355));
 
+        const gltfLoader = new THREE.GLTFLoader();
         const texLoader = new THREE.TextureLoader();
-        const mixers = [];
-        const loader = new THREE.GLTFLoader();
 
-        // Track all materials and original geometry UVs for live editing
-        const allMaterials = [];
-        const originalUVs = []; // { geometry, origArray }
+        // State
+        let currentModel = null;
+        let currentMixer = null;
+        let currentAnimations = [];
+        let currentAction = null;
+        const cache = {}; // dir -> { model, animations }
 
         function loadTexture(path) {
             const tex = texLoader.load(path);
-            tex.encoding = THREE.sRGBEncoding;
+            tex.flipY = false;
             tex.wrapS = THREE.RepeatWrapping;
             tex.wrapT = THREE.RepeatWrapping;
-            tex.flipY = false;
             return tex;
         }
 
-        let loaded = 0;
-        function checkLoaded() {
-            if (++loaded >= 2) document.getElementById('loading').style.display = 'none';
-        }
+        function showCreature(creature) {
+            // Remove current
+            if (currentModel) { scene.remove(currentModel); currentModel = null; }
+            if (currentMixer) { currentMixer = null; }
+            currentAnimations = [];
+            currentAction = null;
 
-        function loadModel(path, texBase, posX, targetHeight, statusId) {
-            loader.load(path, (gltf) => {
+            // Update sidebar
+            document.querySelectorAll('.creature-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.querySelector(`.creature-btn[data-dir="${creature.dir}"]`);
+            if (btn) btn.classList.add('active');
+
+            document.getElementById('model-name').textContent = creature.name;
+
+            // Check cache
+            if (cache[creature.dir]) {
+                displayModel(creature, cache[creature.dir]);
+                return;
+            }
+
+            const basePath = 'models/' + creature.dir + '/';
+
+            gltfLoader.load(basePath + creature.glb, (gltf) => {
                 const model = gltf.scene;
 
-                model.updateMatrixWorld(true);
-                const box = new THREE.Box3().setFromObject(model);
-                const size = new THREE.Vector3();
-                box.getSize(size);
-                const scale = targetHeight / size.y;
-                model.scale.setScalar(scale);
-                model.position.set(posX, 0, 0);
-
-                // Apply textures
-                const diffuse = loadTexture(texBase + '_Gr_D.png');
-                const normal = texLoader.load(texBase + '_N.png');
-                normal.wrapS = THREE.RepeatWrapping;
-                normal.wrapT = THREE.RepeatWrapping;
-                normal.flipY = false;
+                // Apply textures (same as game does)
+                const diffuse = loadTexture(basePath + creature.diffuse);
+                const normal = loadTexture(basePath + creature.normal);
 
                 model.traverse((child) => {
                     if (child.isSkinnedMesh || child.isMesh) {
-                        const mat = new THREE.MeshStandardMaterial({
+                        child.material = new THREE.MeshStandardMaterial({
                             map: diffuse,
                             normalMap: normal,
                             roughness: 0.7,
                             metalness: 0.05,
                             skinning: child.isSkinnedMesh,
                         });
-                        child.material = mat;
-                        allMaterials.push(mat);
-
-                        // Store original UVs for geometry-level flipping
-                        const uvAttr = child.geometry.attributes.uv;
-                        if (uvAttr) {
-                            originalUVs.push({
-                                geometry: child.geometry,
-                                origArray: new Float32Array(uvAttr.array),
-                            });
-                        }
                     }
                 });
 
-                scene.add(model);
-                document.getElementById(statusId).textContent = 'loaded';
+                // Scale to ~2 units tall
+                model.updateMatrixWorld(true);
+                const box = new THREE.Box3().setFromObject(model);
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                const scale = 2 / size.y;
+                model.scale.setScalar(scale);
 
-                const mixer = new THREE.AnimationMixer(model);
-                const runClip = gltf.animations.find(a => a.name.includes('Run_Forward'));
-                if (runClip) mixer.clipAction(runClip).play();
-                else if (gltf.animations.length > 0) mixer.clipAction(gltf.animations[0]).play();
-                mixers.push(mixer);
+                cache[creature.dir] = { model, animations: gltf.animations, scale };
 
-                console.log(`${path} animations:`, gltf.animations.map(a => a.name));
-                checkLoaded();
+                if (btn) { btn.classList.add('loaded'); btn.querySelector('.status').textContent = '✓'; }
+
+                displayModel(creature, cache[creature.dir]);
+
+                console.log(`${creature.name} animations:`, gltf.animations.map(a => a.name));
             }, undefined, (err) => {
-                document.getElementById(statusId).textContent = 'FAILED';
-                console.error(err);
-                checkLoaded();
+                console.error(`Failed to load ${creature.name}:`, err);
+                if (btn) { btn.classList.add('failed'); btn.querySelector('.status').textContent = '✗'; }
             });
         }
 
-        loadModel('models/cat/Cat.glb', 'models/cat/T_Cat', -2, 2, 'cat-status');
-        loadModel('models/wolf/Wolf.glb', 'models/wolf/T_Wolf', 2, 2.5, 'wolf-status');
+        function displayModel(creature, data) {
+            // Clone so we can show it fresh
+            const model = THREE.SkeletonUtils.clone(data.model);
+            model.scale.setScalar(data.scale);
+            model.position.set(0, 0, 0);
+            scene.add(model);
+            currentModel = model;
 
-        // ── UV Controls ──
+            // Set up animations
+            currentAnimations = data.animations;
+            const mixer = new THREE.AnimationMixer(model);
+            currentMixer = mixer;
 
-        const els = {
-            uOffset: document.getElementById('uOffset'),
-            vOffset: document.getElementById('vOffset'),
-            uScale: document.getElementById('uScale'),
-            vScale: document.getElementById('vScale'),
-            uvRotation: document.getElementById('uvRotation'),
-            flipU: document.getElementById('flipU'),
-            flipV: document.getElementById('flipV'),
-            flipTexY: document.getElementById('flipTexY'),
-            geoFlipV: document.getElementById('geoFlipV'),
-        };
+            document.getElementById('anim-count').textContent = currentAnimations.length;
 
-        function applyUVSettings() {
-            const uOff = parseFloat(els.uOffset.value);
-            const vOff = parseFloat(els.vOffset.value);
-            let uSc = parseFloat(els.uScale.value);
-            let vSc = parseFloat(els.vScale.value);
-            const rot = parseFloat(els.uvRotation.value);
-            const flipU = els.flipU.checked;
-            const flipV = els.flipV.checked;
-            const flipTexY = els.flipTexY.checked;
-            const geoFlipV = els.geoFlipV.checked;
+            // Build animation buttons
+            const animDiv = document.getElementById('anim-buttons');
+            const animPanel = document.getElementById('anim-list');
+            animDiv.innerHTML = '';
 
-            if (flipU) uSc = -uSc;
-            if (flipV) vSc = -vSc;
-
-            // Update display values
-            document.getElementById('uOffsetVal').textContent = uOff.toFixed(2);
-            document.getElementById('vOffsetVal').textContent = vOff.toFixed(2);
-            document.getElementById('uScaleVal').textContent = parseFloat(els.uScale.value).toFixed(2);
-            document.getElementById('vScaleVal').textContent = parseFloat(els.vScale.value).toFixed(2);
-            document.getElementById('uvRotationVal').textContent = rot.toFixed(2);
-
-            for (const mat of allMaterials) {
-                if (mat.map) {
-                    mat.map.offset.set(uOff, vOff);
-                    mat.map.repeat.set(uSc, vSc);
-                    mat.map.rotation = rot;
-                    mat.map.flipY = flipTexY;
-                    mat.map.needsUpdate = true;
+            if (currentAnimations.length > 0) {
+                animPanel.style.display = '';
+                for (const clip of currentAnimations) {
+                    const btn = document.createElement('button');
+                    btn.className = 'anim-btn';
+                    btn.textContent = clip.name;
+                    btn.addEventListener('click', () => {
+                        playAnimation(clip.name);
+                        animDiv.querySelectorAll('.anim-btn').forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                    });
+                    animDiv.appendChild(btn);
                 }
-                if (mat.normalMap) {
-                    mat.normalMap.offset.set(uOff, vOff);
-                    mat.normalMap.repeat.set(uSc, vSc);
-                    mat.normalMap.rotation = rot;
-                    mat.normalMap.flipY = flipTexY;
-                    mat.normalMap.needsUpdate = true;
+
+                // Play idle or first animation by default
+                const defaultClip = currentAnimations.find(a => a.name.includes('Idle')) || currentAnimations[0];
+                playAnimation(defaultClip.name);
+                const defaultBtn = animDiv.querySelector('.anim-btn');
+                if (defaultBtn) {
+                    // Find the right button
+                    animDiv.querySelectorAll('.anim-btn').forEach(b => {
+                        if (b.textContent === defaultClip.name) b.classList.add('active');
+                    });
                 }
+            } else {
+                animPanel.style.display = 'none';
             }
 
-            // Geometry UV flip
-            for (const entry of originalUVs) {
-                const uvAttr = entry.geometry.attributes.uv;
-                const orig = entry.origArray;
-                for (let i = 0; i < orig.length; i += 2) {
-                    uvAttr.array[i] = orig[i];         // U stays
-                    uvAttr.array[i + 1] = geoFlipV ? (1 - orig[i + 1]) : orig[i + 1];
-                }
-                uvAttr.needsUpdate = true;
-            }
-
-            // Show current values as copyable text
-            document.getElementById('current-values').textContent =
-                `{ offsetU: ${uOff}, offsetV: ${vOff}, scaleU: ${uSc.toFixed(2)}, scaleV: ${vSc.toFixed(2)}, rot: ${rot.toFixed(2)}, flipTexY: ${flipTexY}, geoFlipV: ${geoFlipV} }`;
+            // Reset camera
+            controls.target.set(0, 1, 0);
+            camera.position.set(0, 2, 6);
+            controls.update();
         }
 
-        // Bind all controls
-        for (const el of Object.values(els)) {
-            el.addEventListener('input', applyUVSettings);
-            el.addEventListener('change', applyUVSettings);
+        function playAnimation(name) {
+            if (!currentMixer || !currentAnimations.length) return;
+            const clip = currentAnimations.find(a => a.name === name);
+            if (!clip) return;
+
+            if (currentAction) currentAction.fadeOut(0.2);
+            const action = currentMixer.clipAction(clip);
+            action.reset().fadeIn(0.2).play();
+            currentAction = action;
         }
 
-        // Presets
-        function setPreset(vals) {
-            els.uOffset.value = vals.uOff || 0;
-            els.vOffset.value = vals.vOff || 0;
-            els.uScale.value = vals.uSc || 1;
-            els.vScale.value = vals.vSc || 1;
-            els.uvRotation.value = vals.rot || 0;
-            els.flipU.checked = vals.flipU || false;
-            els.flipV.checked = vals.flipV || false;
-            els.flipTexY.checked = vals.flipTexY || false;
-            els.geoFlipV.checked = vals.geoFlipV || false;
-            applyUVSettings();
+        // Build sidebar
+        const listEl = document.getElementById('creature-list');
+        for (const c of CREATURES) {
+            const btn = document.createElement('button');
+            btn.className = 'creature-btn';
+            btn.dataset.dir = c.dir;
+            btn.innerHTML = `${c.name} <span class="status">...</span>`;
+            btn.addEventListener('click', () => showCreature(c));
+            listEl.appendChild(btn);
         }
 
-        document.getElementById('preset-default').onclick = () => setPreset({});
-        document.getElementById('preset-flipV').onclick = () => setPreset({ flipV: true });
-        document.getElementById('preset-flipGeoV').onclick = () => setPreset({ geoFlipV: true });
-        document.getElementById('preset-negScaleV').onclick = () => setPreset({ vSc: -1 });
+        // Load first creature
+        document.getElementById('loading').style.display = 'none';
+        showCreature(CREATURES[0]);
 
         // Render loop
         const clock = new THREE.Clock();
         function animate() {
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
-            for (const m of mixers) m.update(delta);
+            if (currentMixer) currentMixer.update(delta);
             controls.update();
             renderer.render(scene, camera);
         }

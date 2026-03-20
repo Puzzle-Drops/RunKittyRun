@@ -616,8 +616,6 @@
             // Enable shadow casting on all meshes
             model.traverse((child) => {
                 if (child.isMesh || child.isSkinnedMesh) {
-                    child.castShadow = true;
-                    child.receiveShadow = true;
                 }
             });
 
@@ -688,8 +686,6 @@
 
             model.traverse((child) => {
                 if (child.isMesh || child.isSkinnedMesh) {
-                    child.castShadow = true;
-                    child.receiveShadow = true;
                 }
             });
 
@@ -767,7 +763,6 @@
         const voidMesh = new THREE.Mesh(voidGeo, MAT.voidGround);
         voidMesh.rotation.x = -Math.PI / 2;
         voidMesh.position.set(WORLD_WIDTH / 2, -3, WORLD_HEIGHT / 2);
-        voidMesh.receiveShadow = true;
         scene.add(voidMesh);
 
         for (const z of mazeZones) {
@@ -789,7 +784,6 @@
             const topMesh = new THREE.Mesh(topGeo, zoneMat);
             topMesh.rotation.x = -Math.PI / 2;
             topMesh.position.set(z.x + z.w / 2, 0.1, z.y + z.h / 2);
-            topMesh.receiveShadow = true;
             scene.add(topMesh);
 
             if (z.type === 'safe' || z.type === 'goal') {
@@ -1089,6 +1083,32 @@
         worldWidth: WORLD_WIDTH,
         worldHeight: WORLD_HEIGHT,
 
+        getSettings() {
+            return [
+                {
+                    key: 'difficulty',
+                    label: 'Difficulty',
+                    type: 'select',
+                    default: 'easy',
+                    options: [
+                        { value: 'easy', label: 'Easy' },
+                        { value: 'medium', label: 'Medium' },
+                        { value: 'hard', label: 'Hard' },
+                    ],
+                },
+                {
+                    key: 'winMode',
+                    label: 'Win Condition',
+                    type: 'select',
+                    default: 'firstin',
+                    options: [
+                        { value: 'firstin', label: 'First In' },
+                        { value: 'allin', label: 'All In' },
+                    ],
+                },
+            ];
+        },
+
         preload() {
             return Promise.all([loadGLBModels(), loadGroundTextures()]);
         },
@@ -1108,23 +1128,12 @@
             renderer3d.setSize(1920, 1080, false);
             renderer3d.setClearColor(0x060610);
             renderer3d.setPixelRatio(1);
-            renderer3d.shadowMap.enabled = true;
-            renderer3d.shadowMap.type = THREE.PCFSoftShadowMap;
             scene = new THREE.Scene();
             scene.fog = new THREE.FogExp2(0x060610, 0.00015);
             camera3d = new THREE.PerspectiveCamera(CAM_FOV, 1920 / 1080, 10, 8000);
             ambientLight = new THREE.AmbientLight(0xccccdd, 0.45); scene.add(ambientLight);
             dirLight = new THREE.DirectionalLight(0xfff5e0, 0.7);
             dirLight.position.set(-1500, 2000, -1000);
-            dirLight.castShadow = true;
-            dirLight.shadow.mapSize.width = 2048;
-            dirLight.shadow.mapSize.height = 2048;
-            dirLight.shadow.camera.near = 100;
-            dirLight.shadow.camera.far = 5000;
-            dirLight.shadow.camera.left = -2500;
-            dirLight.shadow.camera.right = 2500;
-            dirLight.shadow.camera.top = 2500;
-            dirLight.shadow.camera.bottom = -2500;
             scene.add(dirLight);
             const fillLight = new THREE.DirectionalLight(0xaabbdd, 0.25);
             fillLight.position.set(1000, 800, 2000); scene.add(fillLight);

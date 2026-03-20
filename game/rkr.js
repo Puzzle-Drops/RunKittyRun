@@ -394,6 +394,7 @@ module.exports = {
     supportedModes: ['ffa', 'teams'],
     defaultMode: 'ffa',
     defaultTeamCount: 2,
+    defaultSettings: { difficulty: 'easy', winMode: 'firstin' },
 
     init(playerList, settings, gameMode, gameTeamCount) {
         mode = gameMode;

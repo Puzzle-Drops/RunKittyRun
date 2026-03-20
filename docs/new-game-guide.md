@@ -58,10 +58,12 @@ module.exports = {
     supportedModes: ['ffa', 'teams'],   // default: ['ffa']
     defaultMode: 'ffa',
     defaultTeamCount: 2,
+    defaultSettings: { difficulty: 'easy' },  // lobby-configurable settings
 
     // Called when host starts the game. Set up your world state here.
     init(players, settings, mode, teamCount) {
         // players is an array of { id, name, team, color, colorIndex, slot }
+        // settings comes from lobby (e.g. settings.difficulty)
         // Store them, assign spawn positions, etc.
     },
 
@@ -126,8 +128,36 @@ window.GameDef = {
     id: 'my-game',
     name: 'My Game',
     maxPlayers: 8,
-    worldWidth: 3200,       // omit for no camera (defaults to 1920)
-    worldHeight: 2400,      // omit for no camera (defaults to 1080)
+    renderer: '2d',             // '2d' (default) or '3d' for Three.js
+    worldWidth: 3200,           // omit for no camera (defaults to 1920)
+    worldHeight: 2400,          // omit for no camera (defaults to 1080)
+
+    // Preload assets before main menu (optional). Return a Promise.
+    // Framework shows a loading screen until this resolves.
+    preload() {
+        return Promise.all([loadModels(), loadTextures()]);
+    },
+
+    // Lobby settings the host can configure (optional).
+    getSettings() {
+        return [
+            {
+                key: 'difficulty', label: 'Difficulty', type: 'select',
+                default: 'easy',
+                options: [
+                    { value: 'easy', label: 'Easy' },
+                    { value: 'medium', label: 'Medium' },
+                    { value: 'hard', label: 'Hard' },
+                ],
+            },
+        ];
+    },
+
+    // 3D only: set up WebGL renderer on the canvas element.
+    // Called once during countdown. Omit for 2D games.
+    initRenderer(canvasEl) {
+        // Create THREE.WebGLRenderer, scene, camera, lights
+    },
 
     // Camera: what does Y-lock follow? Return { x, y } or null.
     getCameraLockTarget(localPlayer) {
@@ -154,8 +184,8 @@ window.GameDef = {
     },
 
     // Handle game-specific input. Framework filters out chat/ping/scoreboard first.
-    // inputType: 'rightclick', 'leftclick', 'keydown', 'keyup'
-    // data: { x, y } for clicks (world coords), { key } for keys
+    // inputType: 'rightclick', 'rightmousedown', 'rightmouseup', 'click', 'keydown', 'keyup'
+    // data: { x, y } for clicks (world coords), { key, code } for keys
     onInput(inputType, data) {
         if (inputType === 'rightclick') {
             window.PDROP.wsSend({
@@ -261,9 +291,9 @@ For reference, the PDROP Arrow example uses `speed: 7`, arrow speed `10`.
 
 ## Interpolation
 
-The server sends state 20 times per second but the client renders at ~60fps. Without interpolation, entities jump every 50ms. The framework handles basic linear interpolation between the last two states if the game provides position data in the standard format (`{ x, y }` on player/entity objects in `getState()`).
+The server sends state 20 times per second but the client renders at ~60fps. Without interpolation, entities jump every 50ms. The framework handles basic linear interpolation between the last two states if the game provides position data in the standard format (`{ x, y, angle }` on player/entity objects in `getState()`).
 
-If you see stutter, make sure your state objects include `x` and `y` — the framework interpolates those automatically.
+The framework interpolates `x`, `y`, and `angle` (shortest-arc rotation) automatically. If you see stutter, make sure your state objects include these fields. All other properties use the latest server state directly.
 
 ---
 

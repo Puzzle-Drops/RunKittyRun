@@ -90,6 +90,7 @@ function getLobbyInfo(lobby) {
         mode: lobby.mode,
         teamCount: lobby.teamCount,
         state: lobby.state,
+        settings: lobby.settings || {},
         playerCount: lobby.players.length,
         maxPlayers: game.maxPlayers,
         slots: lobby.slots.map(s => ({
@@ -335,7 +336,7 @@ function handleMessage(client, data) {
                 teamCount: teamCount,
                 slots: createSlots(mode, teamCount, game.maxPlayers),
                 state: 'lobby',
-                settings: {},
+                settings: game.defaultSettings ? { ...game.defaultSettings } : {},
                 players: [],
                 gameState: null,
                 tickInterval: null,
@@ -503,6 +504,16 @@ function handleMessage(client, data) {
             if (!lobby || lobby.host !== client.id || lobby.state !== 'lobby') return;
             if (lobby.players.length < 1) return;
             startGame(lobby);
+            break;
+        }
+
+        case 'lobby_settings': {
+            const lobby = lobbies.get(client.lobbyId);
+            if (!lobby || lobby.host !== client.id || lobby.state !== 'lobby') return;
+            if (typeof msg.key === 'string' && msg.value !== undefined) {
+                lobby.settings[msg.key] = msg.value;
+                broadcastToLobby(lobby.id, { type: 'lobby_state', lobby: getLobbyInfo(lobby) });
+            }
             break;
         }
 
