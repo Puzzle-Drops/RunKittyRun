@@ -469,7 +469,8 @@
     }
 
     function loadGroundTextures() {
-        return Promise.all([
+        // Each texture loads independently — failures fall back to procedural
+        return Promise.allSettled([
             loadTextureAsync('Textures/Summer_Flowers.png').then(t => { preloadedTextures.safe = t; }),
             loadTextureAsync('Textures/Summer_Grass_A.png').then(t => { preloadedTextures.danger = t; }),
             loadTextureAsync('Textures/Winter_FrozenGround.png').then(t => { preloadedTextures.void = t; }),
@@ -545,7 +546,7 @@
             }, undefined, (err) => { console.error('Failed to load Wolf GLB:', err); reject(err); });
         }));
 
-        return Promise.all(promises);
+        return Promise.allSettled(promises);
     }
 
     function cloneModel(template) {
@@ -1110,7 +1111,12 @@
         },
 
         preload() {
-            return Promise.all([loadGLBModels(), loadGroundTextures()]);
+            // Use allSettled so one failure doesn't kill everything
+            return Promise.allSettled([loadGLBModels(), loadGroundTextures()]).then(results => {
+                for (const r of results) {
+                    if (r.status === 'rejected') console.warn('Preload partial failure:', r.reason);
+                }
+            });
         },
 
         getCameraLockTarget(lp) {
