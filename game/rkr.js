@@ -11,7 +11,7 @@ const WALL_THICKNESS = 20;
 const CORRIDOR_WIDTH = 400;
 
 // ── Kitten ──
-const KITTEN_SPEED = 18;
+const KITTEN_SPEED = 15;
 const KITTEN_RADIUS = 16;
 
 // ── Dogs ──
@@ -23,11 +23,11 @@ const DOG_WAYPOINTS_MIN = 2;
 const DOG_WAYPOINTS_MAX = 4;
 
 // ── Dog Counts Per Zone ──
-const DOGS_PER_ZONE_EASY = 20;
-const DOGS_PER_ZONE_MEDIUM = 25;
-const DOGS_PER_ZONE_HARD = 30;
+const DOGS_PER_ZONE_EASY = 30;
+const DOGS_PER_ZONE_MEDIUM = 40;
+const DOGS_PER_ZONE_HARD = 50;
 const LESS_DOGS_PER_ZONE = 1;
-const MIN_DOGS_PER_ZONE = 2;
+const MIN_DOGS_PER_ZONE = 5;
 
 // ── Revival ──
 const REVIVE_RADIUS = 40;
@@ -451,6 +451,10 @@ module.exports = {
                 p.x += (dx / dist) * p.speed;
                 p.y += (dy / dist) * p.speed;
                 p.angle = Math.atan2(dy, dx);
+            } else if (dist > 0.1) {
+                // Snap to target when close enough
+                p.x = p.targetX;
+                p.y = p.targetY;
             }
 
             // Check void death (not in any zone)
@@ -528,6 +532,8 @@ module.exports = {
                 colorIndex: p.colorIndex,
                 x: Math.round(p.x),
                 y: Math.round(p.y),
+                targetX: Math.round(p.targetX),
+                targetY: Math.round(p.targetY),
                 angle: Math.round(p.angle * 100) / 100,
                 alive: p.alive,
                 radius: p.radius,

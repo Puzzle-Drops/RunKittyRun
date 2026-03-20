@@ -1171,8 +1171,8 @@
         return null;
     }
 
-    // Suppress browser context menu on the entire game container
-    document.getElementById('game-container').addEventListener('contextmenu', (e) => {
+    // Suppress browser context menu on the entire page
+    document.addEventListener('contextmenu', (e) => {
         e.preventDefault();
     });
 
@@ -1633,6 +1633,53 @@
             wsSend({ type: 'lobby_list' });
         });
     }
+
+    // ── Loading Screen ─────────────────────────────────────────────
+    // If GameDef defines preload(), show a loading screen while assets load.
+    // Games without preload() skip this entirely.
+    // Deferred to next frame so game.js has time to define window.GameDef.
+    setTimeout(function initLoadingScreen() {
+        const loadingEl = document.getElementById('loading-screen');
+        const loadingBar = document.getElementById('loading-bar');
+        const loadingStatus = document.getElementById('loading-status');
+
+        if (!loadingEl) return;
+
+        if (!window.GameDef || !window.GameDef.preload) {
+            // No preload needed — hide loading screen immediately
+            loadingEl.classList.add('hidden');
+            return;
+        }
+
+        // Animate the bar as a progress indicator
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+            // Ease toward 90% while loading (never hits 100 until done)
+            progress += (90 - progress) * 0.05;
+            if (loadingBar) loadingBar.style.width = progress + '%';
+        }, 100);
+
+        if (loadingStatus) loadingStatus.textContent = 'Loading models...';
+
+        window.GameDef.preload().then(() => {
+            clearInterval(progressInterval);
+            if (loadingBar) loadingBar.style.width = '100%';
+            if (loadingStatus) loadingStatus.textContent = 'Ready!';
+
+            setTimeout(() => {
+                loadingEl.classList.add('fade-out');
+                setTimeout(() => loadingEl.classList.add('hidden'), 500);
+            }, 300);
+        }).catch((err) => {
+            console.error('Preload failed:', err);
+            clearInterval(progressInterval);
+            if (loadingStatus) loadingStatus.textContent = 'Failed to load assets. Continuing...';
+            setTimeout(() => {
+                loadingEl.classList.add('fade-out');
+                setTimeout(() => loadingEl.classList.add('hidden'), 500);
+            }, 1500);
+        });
+    }, 0);
 
     // ── Expose for game.js ────────────────────────────────────────
     window.PDROP = {

@@ -76,14 +76,6 @@
                         });
                         break;
                     }
-                    case 'bark': {
-                        const o = c.createOscillator(), g = c.createGain();
-                        o.connect(g); g.connect(c.destination); o.type = 'sawtooth';
-                        o.frequency.setValueAtTime(220, now); o.frequency.exponentialRampToValueAtTime(120, now + 0.12);
-                        g.gain.setValueAtTime(0.06, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-                        o.start(now); o.stop(now + 0.15);
-                        break;
-                    }
                 }
             } catch (e) { }
         }
@@ -103,7 +95,6 @@
     let frameTick = 0;
     let rendererReady = false;
     let mouseCanvasX = 0, mouseCanvasY = 0;
-    let lastBarkTick = 0;
 
     // Track previous positions for movement detection
     let prevPositions = {};
@@ -450,65 +441,73 @@
 
     function loadGLBModels() {
         const loader = new THREE.GLTFLoader();
+        const promises = [];
 
         // Load Cat model
-        loader.load('models/cat/Cat.glb', (gltf) => {
-            const model = gltf.scene;
-            const diffuse = loadGameTexture('models/cat/T_Cat_Gr_D.png');
-            const normal = loadGameTexture('models/cat/T_Cat_N.png');
+        promises.push(new Promise((resolve, reject) => {
+            loader.load('models/cat/Cat.glb', (gltf) => {
+                const model = gltf.scene;
+                const diffuse = loadGameTexture('models/cat/T_Cat_Gr_D.png');
+                const normal = loadGameTexture('models/cat/T_Cat_N.png');
 
-            model.traverse((child) => {
-                if (child.isSkinnedMesh || child.isMesh) {
-                    child.material = new THREE.MeshStandardMaterial({
-                        map: diffuse,
-                        normalMap: normal,
-                        roughness: 0.7,
-                        metalness: 0.05,
-                        skinning: child.isSkinnedMesh,
-                    });
-                }
-            });
+                model.traverse((child) => {
+                    if (child.isSkinnedMesh || child.isMesh) {
+                        child.material = new THREE.MeshStandardMaterial({
+                            map: diffuse,
+                            normalMap: normal,
+                            roughness: 0.7,
+                            metalness: 0.05,
+                            skinning: child.isSkinnedMesh,
+                        });
+                    }
+                });
 
-            // Compute scale factor from bounding box
-            model.updateMatrixWorld(true);
-            const box = new THREE.Box3().setFromObject(model);
-            const size = new THREE.Vector3();
-            box.getSize(size);
-            catScaleFactor = CAT_TARGET_HEIGHT / size.y;
+                model.updateMatrixWorld(true);
+                const box = new THREE.Box3().setFromObject(model);
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                catScaleFactor = CAT_TARGET_HEIGHT / size.y;
 
-            catTemplate = model;
-            catAnimations = gltf.animations;
-            console.log('Cat GLB loaded, animations:', catAnimations.map(a => a.name));
-        }, undefined, (err) => console.error('Failed to load Cat GLB:', err));
+                catTemplate = model;
+                catAnimations = gltf.animations;
+                console.log('Cat GLB loaded, animations:', catAnimations.map(a => a.name));
+                resolve();
+            }, undefined, (err) => { console.error('Failed to load Cat GLB:', err); reject(err); });
+        }));
 
         // Load Wolf model
-        loader.load('models/wolf/Wolf.glb', (gltf) => {
-            const model = gltf.scene;
-            const diffuse = loadGameTexture('models/wolf/T_Wolf_Gr_D.png');
-            const normal = loadGameTexture('models/wolf/T_Wolf_N.png');
+        promises.push(new Promise((resolve, reject) => {
+            loader.load('models/wolf/Wolf.glb', (gltf) => {
+                const model = gltf.scene;
+                const diffuse = loadGameTexture('models/wolf/T_Wolf_Gr_D.png');
+                const normal = loadGameTexture('models/wolf/T_Wolf_N.png');
 
-            model.traverse((child) => {
-                if (child.isSkinnedMesh || child.isMesh) {
-                    child.material = new THREE.MeshStandardMaterial({
-                        map: diffuse,
-                        normalMap: normal,
-                        roughness: 0.7,
-                        metalness: 0.05,
-                        skinning: child.isSkinnedMesh,
-                    });
-                }
-            });
+                model.traverse((child) => {
+                    if (child.isSkinnedMesh || child.isMesh) {
+                        child.material = new THREE.MeshStandardMaterial({
+                            map: diffuse,
+                            normalMap: normal,
+                            roughness: 0.7,
+                            metalness: 0.05,
+                            skinning: child.isSkinnedMesh,
+                        });
+                    }
+                });
 
-            model.updateMatrixWorld(true);
-            const box = new THREE.Box3().setFromObject(model);
-            const size = new THREE.Vector3();
-            box.getSize(size);
-            wolfScaleFactor = WOLF_TARGET_HEIGHT / size.y;
+                model.updateMatrixWorld(true);
+                const box = new THREE.Box3().setFromObject(model);
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                wolfScaleFactor = WOLF_TARGET_HEIGHT / size.y;
 
-            wolfTemplate = model;
-            wolfAnimations = gltf.animations;
-            console.log('Wolf GLB loaded, animations:', wolfAnimations.map(a => a.name));
-        }, undefined, (err) => console.error('Failed to load Wolf GLB:', err));
+                wolfTemplate = model;
+                wolfAnimations = gltf.animations;
+                console.log('Wolf GLB loaded, animations:', wolfAnimations.map(a => a.name));
+                resolve();
+            }, undefined, (err) => { console.error('Failed to load Wolf GLB:', err); reject(err); });
+        }));
+
+        return Promise.all(promises);
     }
 
     function cloneModel(template) {
@@ -775,7 +774,12 @@
     // ENTITY RECONCILIATION + HOP ANIMATION
     // ═══════════════════════════════════════════════════════════
 
-    function isMoving(id, x, y) {
+    function isMoving(id, x, y, targetX, targetY) {
+        // If target coords provided, use intent-based detection (more reliable)
+        if (targetX !== undefined && targetY !== undefined) {
+            return Math.abs(x - targetX) > 2 || Math.abs(y - targetY) > 2;
+        }
+        // Fallback: position-delta detection (for dogs etc.)
         const prev = prevPositions[id];
         if (!prev) return false;
         return Math.abs(x - prev.x) > 0.5 || Math.abs(y - prev.y) > 0.5;
@@ -799,15 +803,42 @@
                 }
             }
             const mesh = kittenMeshes[p.id];
-            mesh.visible = p.alive;
-            if (!p.alive) continue;
+            const ud = mesh.userData;
+
+            // Death handling: show cat fallen at death position
+            if (!p.alive) {
+                mesh.visible = true;
+                mesh.position.set(p.deathX || p.x, 0, p.deathY || p.y);
+                if (ud.isGLB) {
+                    if (ud.currentAnim !== 'death') {
+                        if (ud.runAction) ud.runAction.fadeOut(0.15);
+                        if (ud.idleAction) ud.idleAction.fadeOut(0.15);
+                        ud.currentAnim = 'death';
+                    }
+                    // Tilt the cat on its side (fall-over effect)
+                    const deathProgress = Math.min((ud.deathTick || 0) / 15, 1);
+                    mesh.rotation.z = deathProgress * (Math.PI / 2);
+                    ud.deathTick = (ud.deathTick || 0) + 1;
+                    mesh.scale.set(1, 1, 1);
+                } else {
+                    const bg = mesh.getObjectByName('bodyGroup');
+                    if (bg) { bg.position.y = 0; bg.rotation.z = Math.PI / 2; }
+                }
+                continue;
+            }
+
+            // Reset death state when alive
+            if (ud.deathTick) {
+                ud.deathTick = 0;
+                mesh.rotation.z = 0;
+            }
 
             mesh.position.set(p.x, 0, p.y);
+            mesh.visible = true;
             mesh.rotation.y = -p.angle + Math.PI / 2;
 
-            if (mesh.userData.isGLB) {
-                const moving = isMoving(p.id, p.x, p.y);
-                const ud = mesh.userData;
+            if (ud.isGLB) {
+                const moving = isMoving(p.id, p.x, p.y, p.targetX, p.targetY);
 
                 // Switch between run and idle animations
                 if (moving && ud.currentAnim !== 'run') {
@@ -831,7 +862,7 @@
                 // Procedural fallback
                 const bg = mesh.getObjectByName('bodyGroup');
                 const tail = mesh.getObjectByName('tail');
-                const moving = isMoving(p.id, p.x, p.y);
+                const moving = isMoving(p.id, p.x, p.y, p.targetX, p.targetY);
                 if (moving) {
                     const hopPhase = Math.abs(Math.sin(frameTick * KITTEN_HOP_SPEED));
                     if (bg) { bg.position.y = hopPhase * KITTEN_HOP_HEIGHT; bg.rotation.z = Math.sin(frameTick * KITTEN_HOP_SPEED) * 0.08; }
@@ -920,23 +951,6 @@
             const ud = mesh.userData;
             if (ud.ringMat) ud.ringMat.opacity = 0.35 + Math.sin(frameTick * 0.05) * 0.15;
             if (ud.innerMat) ud.innerMat.opacity = 0.15 + Math.sin(frameTick * 0.05) * 0.1;
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════
-    // PROXIMITY BARK
-    // ═══════════════════════════════════════════════════════════
-
-    function checkDogProximity(gameState) {
-        if (!gameState || !gameState.dogs) return;
-        const lp = gameState.players?.find(p => p.id === window.PDROP.getLocalPlayerId());
-        if (!lp || !lp.alive) return;
-        if (frameTick - lastBarkTick < 60) return;
-        for (const d of gameState.dogs) {
-            const dist = Math.hypot(d.x - lp.x, d.y - lp.y);
-            if (dist < 120 && d.s === 1 && Math.random() < 0.3) {
-                SFX.play('bark'); lastBarkTick = frameTick; break;
-            }
         }
     }
 
@@ -1030,6 +1044,10 @@
         worldWidth: WORLD_WIDTH,
         worldHeight: WORLD_HEIGHT,
 
+        preload() {
+            return loadGLBModels();
+        },
+
         getCameraLockTarget(lp) {
             if (lp && lp.alive && !lp.reachedGoal) return { x: lp.x, y: lp.y };
             return null;
@@ -1067,7 +1085,6 @@
             fillLight.position.set(1000, 800, 2000); scene.add(fillLight);
             initSharedAssets();
             buildMazeScene();
-            loadGLBModels();
             rendererReady = true;
             SFX.init();
         },
@@ -1121,7 +1138,6 @@
                 }
                 reconcileDogs(gameState.dogs);
                 reconcileDeathMarkers(gameState.players || []);
-                checkDogProximity(gameState);
                 updateStatusBar(gameState);
                 updatePersonalStatus(gameState);
             }
@@ -1145,6 +1161,9 @@
 
         onInput(inputType, data) {
             if (inputType === 'rightclick') {
+                // Don't send move commands if dead
+                const lp = window.PDROP.getLocalPlayerFromState();
+                if (lp && !lp.alive) return;
                 window.PDROP.wsSend({ type: 'game_input', data: { type: 'move', x: data.x, y: data.y } });
             }
         },
