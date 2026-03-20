@@ -1176,20 +1176,9 @@
         e.preventDefault();
     });
 
-    canvas.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        if (chatFocused || scoreboardOpen || altHeld) return;
-        if (gamePhase !== 'playing') return;
+    canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 
-        const worldX = mouseCanvasX / camera.zoom + camera.x;
-        const worldY = mouseCanvasY / camera.zoom + camera.y;
-
-        if (window.GameDef && window.GameDef.onInput) {
-            window.GameDef.onInput('rightclick', { x: worldX, y: worldY });
-        }
-    });
-
-    // Also handle right-click on the container (in case UI overlay intercepts)
+    // Right-click: send down/up events so games can support hold-to-move
     container.addEventListener('mousedown', (e) => {
         if (e.button === 2) {
             if (chatFocused || scoreboardOpen || altHeld) return;
@@ -1200,6 +1189,15 @@
 
             if (window.GameDef && window.GameDef.onInput) {
                 window.GameDef.onInput('rightclick', { x: worldX, y: worldY });
+                window.GameDef.onInput('rightmousedown', { x: worldX, y: worldY });
+            }
+        }
+    });
+
+    document.addEventListener('mouseup', (e) => {
+        if (e.button === 2) {
+            if (window.GameDef && window.GameDef.onInput) {
+                window.GameDef.onInput('rightmouseup', {});
             }
         }
     });

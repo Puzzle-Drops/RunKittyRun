@@ -12,7 +12,7 @@
     const WALL_THICKNESS = 20;
     const CORRIDOR_WIDTH = 400;
     const KITTEN_RADIUS = 16;
-    const DOG_RADIUS = 18;
+    const DOG_RADIUS = 25;
 
     const CAM_BASE_HEIGHT = 1100;
     const CAM_TILT_FACTOR = 0.45;
@@ -98,6 +98,7 @@
 
     // Track previous positions for movement detection
     let prevPositions = {};
+    let rightMouseHeld = false;
 
     // GLB model system
     let catTemplate = null;
@@ -108,7 +109,7 @@
     let lastTime = 0;
 
     const CAT_TARGET_HEIGHT = 25;   // Target height in game units
-    const WOLF_TARGET_HEIGHT = 35;
+    const WOLF_TARGET_HEIGHT = 52.5;  // 150% of original 35
     let catScaleFactor = 1;
     let wolfScaleFactor = 1;
 
@@ -398,14 +399,14 @@
             pawToe: new THREE.SphereGeometry(1.8, 5, 5),
         };
 
-        // Procedural textures
-        const stoneTex = createStoneTexture();
+        // Ground textures (use preloaded PNGs if available, fall back to procedural)
+        const stoneTex = preloadedTextures.safe || createStoneTexture();
         stoneTex.repeat.set(4, 4);
-        const grassTex = createGrassTexture();
+        const grassTex = preloadedTextures.danger || createGrassTexture();
         grassTex.repeat.set(4, 4);
-        const obsidianTex = createObsidianTexture();
+        const obsidianTex = preloadedTextures.void || createObsidianTexture();
         obsidianTex.repeat.set(12, 12);
-        const goalTex = createGoalTexture();
+        const goalTex = preloadedTextures.goal || createGoalTexture();
         goalTex.repeat.set(3, 3);
 
         MAT = {
@@ -427,8 +428,11 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    // GLB MODEL LOADING
+    // TEXTURE & MODEL LOADING
     // ═══════════════════════════════════════════════════════════
+
+    // Preloaded ground textures (populated by preload, used by initSharedAssets)
+    let preloadedTextures = {};
 
     function loadGameTexture(path) {
         const texLoader = new THREE.TextureLoader();
@@ -437,6 +441,29 @@
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
         return tex;
+    }
+
+    function loadTextureAsync(path) {
+        return new Promise((resolve, reject) => {
+            const texLoader = new THREE.TextureLoader();
+            texLoader.load(path, (tex) => {
+                tex.wrapS = THREE.RepeatWrapping;
+                tex.wrapT = THREE.RepeatWrapping;
+                resolve(tex);
+            }, undefined, (err) => {
+                console.error('Failed to load texture:', path, err);
+                reject(err);
+            });
+        });
+    }
+
+    function loadGroundTextures() {
+        return Promise.all([
+            loadTextureAsync('Textures/Summer_Flowers.png').then(t => { preloadedTextures.safe = t; }),
+            loadTextureAsync('Textures/Summer_Grass_A.png').then(t => { preloadedTextures.danger = t; }),
+            loadTextureAsync('Textures/Winter_FrozenGround.png').then(t => { preloadedTextures.void = t; }),
+            loadTextureAsync('Textures/Summer_Roses.png').then(t => { preloadedTextures.goal = t; }),
+        ]);
     }
 
     function loadGLBModels() {
@@ -586,16 +613,20 @@
             model.name = 'glbModel';
             group.add(model);
 
-            // Set up animation mixer with idle + run
+            // Set up animation mixer with idle + run + death
             const mixer = new THREE.AnimationMixer(model);
             const runClip = findAnimation(catAnimations, 'Run_Forward');
             const idleClip = findAnimation(catAnimations, 'Idle01') || findAnimation(catAnimations, 'idle');
+            const deathClip = findAnimation(catAnimations, 'Death');
             const runAction = runClip ? mixer.clipAction(runClip) : null;
             const idleAction = idleClip ? mixer.clipAction(idleClip) : null;
+            const deathAction = deathClip ? mixer.clipAction(deathClip) : null;
+            if (deathAction) { deathAction.setLoop(THREE.LoopOnce); deathAction.clampWhenFinished = true; }
             if (idleAction) idleAction.play();
             group.userData.mixer = mixer;
             group.userData.runAction = runAction;
             group.userData.idleAction = idleAction;
+            group.userData.deathAction = deathAction;
             group.userData.currentAnim = 'idle';
             group.userData.isGLB = true;
         } else {
@@ -813,12 +844,9 @@
                     if (ud.currentAnim !== 'death') {
                         if (ud.runAction) ud.runAction.fadeOut(0.15);
                         if (ud.idleAction) ud.idleAction.fadeOut(0.15);
+                        if (ud.deathAction) { ud.deathAction.reset().fadeIn(0.15).play(); }
                         ud.currentAnim = 'death';
                     }
-                    // Tilt the cat on its side (fall-over effect)
-                    const deathProgress = Math.min((ud.deathTick || 0) / 15, 1);
-                    mesh.rotation.z = deathProgress * (Math.PI / 2);
-                    ud.deathTick = (ud.deathTick || 0) + 1;
                     mesh.scale.set(1, 1, 1);
                 } else {
                     const bg = mesh.getObjectByName('bodyGroup');
@@ -827,10 +855,10 @@
                 continue;
             }
 
-            // Reset death state when alive
-            if (ud.deathTick) {
-                ud.deathTick = 0;
-                mesh.rotation.z = 0;
+            // Reset death state when alive (revived)
+            if (ud.currentAnim === 'death') {
+                if (ud.deathAction) ud.deathAction.fadeOut(0.15);
+                ud.currentAnim = 'none'; // force re-evaluation below
             }
 
             mesh.position.set(p.x, 0, p.y);
@@ -1045,7 +1073,7 @@
         worldHeight: WORLD_HEIGHT,
 
         preload() {
-            return loadGLBModels();
+            return Promise.all([loadGLBModels(), loadGroundTextures()]);
         },
 
         getCameraLockTarget(lp) {
@@ -1130,6 +1158,17 @@
                 animMixers[id].update(delta);
             }
 
+            // Continuously move toward cursor while right mouse held
+            if (rightMouseHeld) {
+                const lp = window.PDROP.getLocalPlayerFromState();
+                if (lp && lp.alive) {
+                    const cam = window.PDROP.camera;
+                    const worldX = mouseCanvasX / cam.zoom + cam.x;
+                    const worldY = mouseCanvasY / cam.zoom + cam.y;
+                    window.PDROP.wsSend({ type: 'game_input', data: { type: 'move', x: worldX, y: worldY } });
+                }
+            }
+
             if (gameState) {
                 reconcileKittens(gameState.players || []);
                 // Store kitten positions AFTER reconcile so isMoving works next frame
@@ -1160,11 +1199,16 @@
         },
 
         onInput(inputType, data) {
-            if (inputType === 'rightclick') {
-                // Don't send move commands if dead
+            if (inputType === 'rightclick' || inputType === 'rightmousedown') {
                 const lp = window.PDROP.getLocalPlayerFromState();
                 if (lp && !lp.alive) return;
                 window.PDROP.wsSend({ type: 'game_input', data: { type: 'move', x: data.x, y: data.y } });
+                if (inputType === 'rightmousedown') rightMouseHeld = true;
+            } else if (inputType === 'rightmouseup') {
+                rightMouseHeld = false;
+            } else if (inputType === 'keydown' && data.key === 's') {
+                rightMouseHeld = false;
+                window.PDROP.wsSend({ type: 'game_input', data: { type: 'stop' } });
             }
         },
 

@@ -15,8 +15,8 @@ const KITTEN_SPEED = 15;
 const KITTEN_RADIUS = 16;
 
 // ── Dogs ──
-const DOG_SPEED = 10;
-const DOG_RADIUS = 18;
+const DOG_SPEED = 8;
+const DOG_RADIUS = 25;
 const DOG_IDLE_MIN = 40;       // 2 seconds
 const DOG_IDLE_MAX = 400;      // 20 seconds
 const DOG_WAYPOINTS_MIN = 2;
@@ -519,6 +519,10 @@ module.exports = {
             // Clamp target to world bounds
             p.targetX = Math.max(0, Math.min(WORLD_WIDTH, message.x));
             p.targetY = Math.max(0, Math.min(WORLD_HEIGHT, message.y));
+        } else if (message.type === 'stop') {
+            // Stop in place using server's authoritative position
+            p.targetX = p.x;
+            p.targetY = p.y;
         }
     },
 
