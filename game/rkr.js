@@ -11,11 +11,11 @@ const WALL_THICKNESS = 20;
 const CORRIDOR_WIDTH = 400;
 
 // ── Kitten ──
-const KITTEN_SPEED = 10;
+const KITTEN_SPEED = 18;
 const KITTEN_RADIUS = 16;
 
 // ── Dogs ──
-const DOG_SPEED = 8;
+const DOG_SPEED = 10;
 const DOG_RADIUS = 18;
 const DOG_IDLE_MIN = 40;       // 2 seconds
 const DOG_IDLE_MAX = 400;      // 20 seconds
