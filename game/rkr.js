@@ -51,6 +51,37 @@ let mode = 'ffa';
 let teamCount = 1;
 let difficulty = 'easy';
 let winMode = 'firstin';
+
+// ── Spatial Grid for Collision ──
+const GRID_CELL_SIZE = 200;
+const GRID_COLS = Math.ceil(WORLD_WIDTH / GRID_CELL_SIZE);
+const GRID_ROWS = Math.ceil(WORLD_HEIGHT / GRID_CELL_SIZE);
+let dogGrid = []; // array of arrays, indexed by cell
+
+function buildDogGrid() {
+    dogGrid = new Array(GRID_COLS * GRID_ROWS);
+    for (let i = 0; i < dogGrid.length; i++) dogGrid[i] = [];
+    for (const dog of dogs) {
+        const col = Math.min(Math.floor(dog.x / GRID_CELL_SIZE), GRID_COLS - 1);
+        const row = Math.min(Math.floor(dog.y / GRID_CELL_SIZE), GRID_ROWS - 1);
+        if (col >= 0 && row >= 0) dogGrid[row * GRID_COLS + col].push(dog);
+    }
+}
+
+function getDogsNear(x, y, radius) {
+    const result = [];
+    const minCol = Math.max(0, Math.floor((x - radius) / GRID_CELL_SIZE));
+    const maxCol = Math.min(GRID_COLS - 1, Math.floor((x + radius) / GRID_CELL_SIZE));
+    const minRow = Math.max(0, Math.floor((y - radius) / GRID_CELL_SIZE));
+    const maxRow = Math.min(GRID_ROWS - 1, Math.floor((y + radius) / GRID_CELL_SIZE));
+    for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+            const cell = dogGrid[r * GRID_COLS + c];
+            for (let i = 0; i < cell.length; i++) result.push(cell[i]);
+        }
+    }
+    return result;
+}
 let pendingEvents = [];
 let nextDogId = 0;
 
@@ -188,7 +219,37 @@ function pointInZone(x, y, zone) {
            y >= zone.y && y <= zone.y + zone.h;
 }
 
+// Zone grid for fast spatial lookups
+const ZONE_GRID_SIZE = 100;
+let zoneGrid = null;
+let zoneGridCols = 0, zoneGridRows = 0;
+
+function buildZoneGrid() {
+    zoneGridCols = Math.ceil(WORLD_WIDTH / ZONE_GRID_SIZE);
+    zoneGridRows = Math.ceil(WORLD_HEIGHT / ZONE_GRID_SIZE);
+    zoneGrid = new Uint8Array(zoneGridCols * zoneGridRows); // 0 = void, 1 = zone
+    for (const z of zones) {
+        const minC = Math.max(0, Math.floor(z.x / ZONE_GRID_SIZE));
+        const maxC = Math.min(zoneGridCols - 1, Math.floor((z.x + z.w) / ZONE_GRID_SIZE));
+        const minR = Math.max(0, Math.floor(z.y / ZONE_GRID_SIZE));
+        const maxR = Math.min(zoneGridRows - 1, Math.floor((z.y + z.h) / ZONE_GRID_SIZE));
+        for (let r = minR; r <= maxR; r++) {
+            for (let c = minC; c <= maxC; c++) {
+                zoneGrid[r * zoneGridCols + c] = 1;
+            }
+        }
+    }
+}
+
 function isInAnyZone(x, y) {
+    // Fast grid check first
+    if (zoneGrid) {
+        const c = Math.floor(x / ZONE_GRID_SIZE);
+        const r = Math.floor(y / ZONE_GRID_SIZE);
+        if (c < 0 || c >= zoneGridCols || r < 0 || r >= zoneGridRows) return false;
+        if (zoneGrid[r * zoneGridCols + c] === 0) return false;
+    }
+    // Precise check
     for (const z of zones) {
         if (pointInZone(x, y, z)) return true;
     }
@@ -408,6 +469,7 @@ module.exports = {
         const mazeData = generateMaze(difficulty);
         zones = mazeData.zones;
         goalZone = mazeData.goalZone;
+        buildZoneGrid();
 
         // Spawn players
         const spawns = getSpawnPositions(playerList.length);
@@ -483,30 +545,37 @@ module.exports = {
         // ── Move dogs ──
         tickDogs();
 
-        // ── Dog-kitten collision ──
-        for (const dog of dogs) {
-            for (const p of Object.values(players)) {
-                if (!p.alive || p.reachedGoal) continue;
-                if (p.invulnTicks > 0) continue;
+        // ── Build spatial grid for collision ──
+        buildDogGrid();
 
-                const dist = Math.hypot(dog.x - p.x, dog.y - p.y);
-                if (dist < dog.radius + p.radius) {
+        // ── Dog-kitten collision (spatial grid) ──
+        for (const p of Object.values(players)) {
+            if (!p.alive || p.reachedGoal || p.invulnTicks > 0) continue;
+            const checkRadius = p.radius + DOG_RADIUS;
+            const nearbyDogs = getDogsNear(p.x, p.y, checkRadius + GRID_CELL_SIZE);
+            for (const dog of nearbyDogs) {
+                const dx = dog.x - p.x, dy = dog.y - p.y;
+                if (dx * dx + dy * dy < (dog.radius + p.radius) * (dog.radius + p.radius)) {
                     killPlayer(p);
+                    break;
                 }
             }
         }
 
-        // ── Revival check ──
-        const deadPlayers = Object.values(players).filter(p => !p.alive && p.deathX !== null);
-        const alivePlayers = Object.values(players).filter(p => p.alive && !p.reachedGoal);
+        // ── Revival check (single pass to build lists) ──
+        const deadPlayers = [];
+        const alivePlayers = [];
+        for (const p of Object.values(players)) {
+            if (!p.alive && p.deathX !== null) deadPlayers.push(p);
+            else if (p.alive && !p.reachedGoal) alivePlayers.push(p);
+        }
 
+        const reviveRadiusSq = REVIVE_RADIUS * REVIVE_RADIUS;
         for (const dead of deadPlayers) {
             for (const alive of alivePlayers) {
-                // Check team compatibility
                 if (mode !== 'ffa' && dead.team !== alive.team) continue;
-
-                const dist = Math.hypot(alive.x - dead.deathX, alive.y - dead.deathY);
-                if (dist < REVIVE_RADIUS) {
+                const dx = alive.x - dead.deathX, dy = alive.y - dead.deathY;
+                if (dx * dx + dy * dy < reviveRadiusSq) {
                     revivePlayer(dead, alive);
                     break;
                 }

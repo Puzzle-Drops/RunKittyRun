@@ -92,6 +92,7 @@
     let deathMarkers = {};
     let goalPulse = 0;
     let mazeZones = [];
+    let zoneMatCache = {};
     let frameTick = 0;
     let rendererReady = false;
     let mouseCanvasX = 0, mouseCanvasY = 0;
@@ -99,6 +100,8 @@
     // Track previous positions for movement detection
     let prevPositions = {};
     let rightMouseHeld = false;
+    let lastMoveTime = 0;
+    const MOVE_THROTTLE_MS = 50; // Match server tick rate (20/sec)
 
     // Visual rotation smoothing (per entity)
     const visualAngles = {};
@@ -410,7 +413,7 @@
             pawToe: new THREE.SphereGeometry(1.8, 5, 5),
         };
 
-        // Ground textures (use preloaded PNGs if available, fall back to procedural)
+        // Ground textures (use preloaded PNGs, only generate procedural if needed)
         const stoneTex = preloadedTextures.safe || createStoneTexture();
         stoneTex.repeat.set(4, 4);
         const grassTex = preloadedTextures.danger || createGrassTexture();
@@ -419,6 +422,10 @@
         obsidianTex.repeat.set(12, 12);
         const goalTex = preloadedTextures.goal || createGoalTexture();
         goalTex.repeat.set(3, 3);
+
+        // Pre-create zone materials at different UV scales to avoid per-zone cloning
+        // Key: "type_w_h" -> material
+        zoneMatCache = {};
 
         MAT = {
             shadow: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false }),
@@ -766,19 +773,27 @@
         voidMesh.position.set(WORLD_WIDTH / 2, -3, WORLD_HEIGHT / 2);
         scene.add(voidMesh);
 
+        // Single reusable goal border material
+        const goalBorderMat = new THREE.MeshBasicMaterial({ color: 0xffdd44, transparent: true, opacity: 0.12, depthWrite: false });
+
         for (const z of mazeZones) {
-            let mat;
-            if (z.type === 'safe') mat = MAT.safeGround;
-            else if (z.type === 'danger') mat = MAT.dangerGround;
-            else if (z.type === 'goal') mat = MAT.goalGround;
+            let baseMat;
+            if (z.type === 'safe') baseMat = MAT.safeGround;
+            else if (z.type === 'danger') baseMat = MAT.dangerGround;
+            else if (z.type === 'goal') baseMat = MAT.goalGround;
             else continue;
 
-            // Clone material so each zone can have its own UV repeat
-            const zoneMat = mat.clone();
-            if (zoneMat.map) {
-                zoneMat.map = zoneMat.map.clone();
-                zoneMat.map.needsUpdate = true;
-                zoneMat.map.repeat.set(z.w / 128, z.h / 128);
+            // Cache zone materials by type+size to avoid cloning per zone
+            const cacheKey = z.type + '_' + z.w + '_' + z.h;
+            let zoneMat = zoneMatCache[cacheKey];
+            if (!zoneMat) {
+                zoneMat = baseMat.clone();
+                if (zoneMat.map) {
+                    zoneMat.map = zoneMat.map.clone();
+                    zoneMat.map.needsUpdate = true;
+                    zoneMat.map.repeat.set(z.w / 128, z.h / 128);
+                }
+                zoneMatCache[cacheKey] = zoneMat;
             }
 
             const topGeo = new THREE.PlaneGeometry(z.w, z.h);
@@ -789,10 +804,7 @@
 
             if (z.type === 'safe' || z.type === 'goal') {
                 const borderGeo = new THREE.PlaneGeometry(z.w + 4, z.h + 4);
-                const borderMat = z.type === 'goal'
-                    ? new THREE.MeshBasicMaterial({ color: 0xffdd44, transparent: true, opacity: 0.12, depthWrite: false })
-                    : MAT.zoneBorder;
-                const border = new THREE.Mesh(borderGeo, borderMat);
+                const border = new THREE.Mesh(borderGeo, z.type === 'goal' ? goalBorderMat : MAT.zoneBorder);
                 border.rotation.x = -Math.PI / 2;
                 border.position.set(z.x + z.w / 2, 0.05, z.y + z.h / 2);
                 scene.add(border);
@@ -998,25 +1010,33 @@
     // NAME LABELS (overlay canvas)
     // ═══════════════════════════════════════════════════════════
 
+    // Reuse vector for name label projection
+    const _labelVec = new THREE.Vector3();
+
     function drawNameLabels(gameState) {
         const overlay = window.PDROP.getOverlayCanvas();
         if (!overlay) return;
         const oc = overlay.getContext('2d');
         if (!oc || !gameState) return;
-        const vec = new THREE.Vector3();
+        oc.font = '600 20px Rajdhani';
+        oc.textAlign = 'center';
+        oc.textBaseline = 'bottom';
         for (const p of gameState.players) {
             if (!p.alive) continue;
-            vec.set(p.x, 25, p.y); vec.project(camera3d);
-            const sx = (vec.x * 0.5 + 0.5) * 1920;
-            const sy = (-vec.y * 0.5 + 0.5) * 1080;
+            _labelVec.set(p.x, 25, p.y);
+            _labelVec.project(camera3d);
+            const sx = (_labelVec.x * 0.5 + 0.5) * 1920;
+            const sy = (-_labelVec.y * 0.5 + 0.5) * 1080;
             if (sx < -100 || sx > 2020 || sy < -100 || sy > 1180) continue;
-            oc.font = '600 20px Rajdhani';
-            oc.textAlign = 'center'; oc.textBaseline = 'bottom';
-            oc.fillStyle = 'rgba(0,0,0,0.6)'; oc.fillText(p.name, sx + 1, sy + 1);
-            oc.fillStyle = '#ffffff'; oc.fillText(p.name, sx, sy);
+            oc.fillStyle = 'rgba(0,0,0,0.6)';
+            oc.fillText(p.name, sx + 1, sy + 1);
+            oc.fillStyle = '#ffffff';
+            oc.fillText(p.name, sx, sy);
             if (p.reachedGoal) {
-                oc.fillStyle = '#f0c040'; oc.font = '700 16px Rajdhani';
+                oc.fillStyle = '#f0c040';
+                oc.font = '700 16px Rajdhani';
                 oc.fillText('\u2605 SAFE', sx, sy - 18);
+                oc.font = '600 20px Rajdhani';
             }
         }
     }
@@ -1030,9 +1050,12 @@
         if (!el || !gameState || !gameState.players) return;
         const lobby = window.PDROP.getCurrentLobby();
         const isTeams = lobby && lobby.mode === 'teams';
-        const running = gameState.players.filter(p => p.alive && !p.reachedGoal).length;
-        const caught = gameState.players.filter(p => !p.alive).length;
-        const finished = gameState.players.filter(p => p.reachedGoal).length;
+        let running = 0, caught = 0, finished = 0;
+        for (const p of gameState.players) {
+            if (p.reachedGoal) finished++;
+            else if (!p.alive) caught++;
+            else running++;
+        }
         if (isTeams) {
             const td = {};
             const TC = window.PDROP.COLORS, TN = window.PDROP.COLOR_NAMES;
@@ -1180,22 +1203,37 @@
             if (!rendererReady || !renderer3d) return;
             frameTick++;
 
-            // Update animation mixers
+            // Update animation mixers (only for visible/nearby entities)
             const now = performance.now() / 1000;
             const delta = lastTime ? Math.min(now - lastTime, 0.1) : 0.016;
             lastTime = now;
+            const camX = fwCamera.x + 960 / (fwCamera.zoom || 1);
+            const camZ = fwCamera.y + 540 / (fwCamera.zoom || 1);
+            const viewRange = 1400 / (fwCamera.zoom || 1); // visible range from camera center
             for (const id in animMixers) {
+                // Skip mixer updates for entities far from camera
+                const mesh = id.startsWith('dog_') ? dogMeshes[id.replace('dog_', '')] :
+                             id.startsWith('kitten_') ? kittenMeshes[id.replace('kitten_', '')] : null;
+                if (mesh) {
+                    const dx = mesh.position.x - camX;
+                    const dz = mesh.position.z - camZ;
+                    if (dx * dx + dz * dz > viewRange * viewRange) continue;
+                }
                 animMixers[id].update(delta);
             }
 
-            // Continuously move toward cursor while right mouse held
+            // Continuously move toward cursor while right mouse held (throttled to tick rate)
             if (rightMouseHeld) {
-                const lp = window.PDROP.getLocalPlayerFromState();
-                if (lp && lp.alive) {
-                    const cam = window.PDROP.camera;
-                    const worldX = mouseCanvasX / cam.zoom + cam.x;
-                    const worldY = mouseCanvasY / cam.zoom + cam.y;
-                    window.PDROP.wsSend({ type: 'game_input', data: { type: 'move', x: worldX, y: worldY } });
+                const now = performance.now();
+                if (now - lastMoveTime >= MOVE_THROTTLE_MS) {
+                    lastMoveTime = now;
+                    const lp = window.PDROP.getLocalPlayerFromState();
+                    if (lp && lp.alive) {
+                        const cam = window.PDROP.camera;
+                        const worldX = mouseCanvasX / cam.zoom + cam.x;
+                        const worldY = mouseCanvasY / cam.zoom + cam.y;
+                        window.PDROP.wsSend({ type: 'game_input', data: { type: 'move', x: worldX, y: worldY } });
+                    }
                 }
             }
 
