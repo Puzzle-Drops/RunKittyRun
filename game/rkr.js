@@ -15,7 +15,9 @@ const KITTEN_SPEED = 15;
 const KITTEN_RADIUS = 16;
 
 // ── Dogs ──
-const DOG_SPEED = 8;
+const DOG_SPEED_EASY = 8;
+const DOG_SPEED_MEDIUM = 9;
+const DOG_SPEED_HARD = 10;
 const DOG_RADIUS = 25;
 const DOG_IDLE_MIN = 40;       // 2 seconds
 const DOG_IDLE_MAX = 400;      // 20 seconds
@@ -223,7 +225,7 @@ function spawnDogs() {
                 x: x,
                 y: y,
                 angle: Math.random() * Math.PI * 2,
-                speed: DOG_SPEED,
+                speed: difficulty === 'hard' ? DOG_SPEED_HARD : difficulty === 'medium' ? DOG_SPEED_MEDIUM : DOG_SPEED_EASY,
                 radius: DOG_RADIUS,
                 state: 'idle',
                 idleTimer: randomIdleTime(),

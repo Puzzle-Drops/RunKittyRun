@@ -100,6 +100,17 @@
     let prevPositions = {};
     let rightMouseHeld = false;
 
+    // Visual rotation smoothing (per entity)
+    const visualAngles = {};
+    const ROTATION_LERP_SPEED = 0.18; // 0-1, higher = snappier
+
+    function lerpAngle(current, target, t) {
+        let da = target - current;
+        while (da > Math.PI) da -= 2 * Math.PI;
+        while (da < -Math.PI) da += 2 * Math.PI;
+        return current + da * t;
+    }
+
     // GLB model system
     let catTemplate = null;
     let wolfTemplate = null;
@@ -108,8 +119,8 @@
     let animMixers = {};  // entity id -> AnimationMixer
     let lastTime = 0;
 
-    const CAT_TARGET_HEIGHT = 25;   // Target height in game units
-    const WOLF_TARGET_HEIGHT = 52.5;  // 150% of original 35
+    const CAT_TARGET_HEIGHT = 31.25;   // 25% larger visual model
+    const WOLF_TARGET_HEIGHT = 65.625; // 25% larger visual model
     let catScaleFactor = 1;
     let wolfScaleFactor = 1;
 
@@ -863,7 +874,12 @@
 
             mesh.position.set(p.x, 0, p.y);
             mesh.visible = true;
-            mesh.rotation.y = -p.angle + Math.PI / 2;
+
+            // Smooth visual rotation
+            const targetRot = -p.angle + Math.PI / 2;
+            if (visualAngles[p.id] === undefined) visualAngles[p.id] = targetRot;
+            visualAngles[p.id] = lerpAngle(visualAngles[p.id], targetRot, ROTATION_LERP_SPEED);
+            mesh.rotation.y = visualAngles[p.id];
 
             if (ud.isGLB) {
                 const moving = isMoving(p.id, p.x, p.y, p.targetX, p.targetY);
@@ -927,13 +943,17 @@
             }
             const mesh = dogMeshes[d.id];
             mesh.position.set(d.x, 0, d.y);
-            mesh.rotation.y = -d.angle + Math.PI / 2;
+
+            // Smooth visual rotation
+            const dogKey = 'dog_' + d.id;
+            const targetRot = -d.angle + Math.PI / 2;
+            if (visualAngles[dogKey] === undefined) visualAngles[dogKey] = targetRot;
+            visualAngles[dogKey] = lerpAngle(visualAngles[dogKey], targetRot, ROTATION_LERP_SPEED);
+            mesh.rotation.y = visualAngles[dogKey];
 
             if (mesh.userData.isGLB) {
-                const moving = isMoving('dog_' + d.id, d.x, d.y);
-                const isIdle = d.s === 0;
                 const ud = mesh.userData;
-                const shouldRun = moving && !isIdle;
+                const shouldRun = d.s === 1; // Use server state directly
 
                 if (shouldRun && ud.currentAnim !== 'run') {
                     if (ud.idleAction) ud.idleAction.fadeOut(0.2);
@@ -948,9 +968,8 @@
                 // Procedural fallback
                 const bg = mesh.getObjectByName('bodyGroup');
                 const tail = mesh.getObjectByName('tail');
-                const isIdle = d.s === 0;
-                const moving = isMoving('dog_' + d.id, d.x, d.y);
-                if (moving && !isIdle) {
+                const shouldRun = d.s === 1;
+                if (shouldRun) {
                     const hopPhase = Math.abs(Math.sin(frameTick * DOG_HOP_SPEED + d.id * 0.7));
                     if (bg) { bg.position.y = hopPhase * DOG_HOP_HEIGHT; bg.rotation.z = Math.sin(frameTick * DOG_HOP_SPEED + d.id * 0.7) * 0.06; }
                     if (tail) { tail.rotation.x = Math.sin(frameTick * 0.25 + d.id * 3) * 0.5; }
@@ -959,8 +978,6 @@
                     if (tail) { tail.rotation.x = Math.sin(frameTick * 0.1 + d.id * 3) * 0.4; }
                 }
             }
-
-            prevPositions['dog_' + d.id] = { x: d.x, y: d.y };
         }
     }
 

@@ -1467,10 +1467,15 @@
             lerped.players = gameState.players.map(p => {
                 const prev = prevMap[p.id];
                 if (!prev) return p;
+                // Lerp angle via shortest arc
+                let da = p.angle - prev.angle;
+                while (da > Math.PI) da -= 2 * Math.PI;
+                while (da < -Math.PI) da += 2 * Math.PI;
                 return {
                     ...p,
                     x: prev.x + (p.x - prev.x) * t,
                     y: prev.y + (p.y - prev.y) * t,
+                    angle: prev.angle + da * t,
                 };
             });
         }
@@ -1483,10 +1488,14 @@
             lerped.dogs = gameState.dogs.map(d => {
                 const prev = prevMap[d.id];
                 if (!prev) return d;
+                let da = d.angle - prev.angle;
+                while (da > Math.PI) da -= 2 * Math.PI;
+                while (da < -Math.PI) da += 2 * Math.PI;
                 return {
                     ...d,
                     x: prev.x + (d.x - prev.x) * t,
                     y: prev.y + (d.y - prev.y) * t,
+                    angle: prev.angle + da * t,
                 };
             });
         }
